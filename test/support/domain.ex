@@ -17,6 +17,9 @@ defmodule AshStorage.Test.Domain do
     resource AshStorage.Test.ExtraAttrsPost
     resource AshStorage.Test.ChecksumVerifyingPost
     resource AshStorage.Test.ActorRequiredPost
+    resource AshStorage.Test.PolicyRequiredBlob
+    resource AshStorage.Test.PolicyRequiredAttachment
+    resource AshStorage.Test.PolicyRequiredPost
     resource AshStorage.Test.NoHeadPost
     resource AshStorage.Test.MultipartEtagPost
     resource AshStorage.Test.NestedPathPost

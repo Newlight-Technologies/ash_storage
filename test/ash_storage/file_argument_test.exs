@@ -156,6 +156,105 @@ defmodule AshStorage.FileArgumentTest do
     end
   end
 
+  describe "caller context contract" do
+    test "HandleFileArgument authorizes nested blob and attachment creates with the caller actor" do
+      path = Path.join(System.tmp_dir!(), "ash_storage_policy_create.txt")
+      File.write!(path, "policy create")
+
+      assert {:ok, post} =
+               AshStorage.Test.PolicyRequiredPost
+               |> Ash.Changeset.for_create(
+                 :create_with_image,
+                 %{
+                   title: "policy protected",
+                   cover_image: Ash.Type.File.from_path(path)
+                 },
+                 actor: :authorized
+               )
+               |> Ash.create()
+
+      post = Ash.load!(post, [cover_image: :blob], actor: :authorized)
+      assert post.cover_image.blob.filename == "ash_storage_policy_create.txt"
+    after
+      File.rm(Path.join(System.tmp_dir!(), "ash_storage_policy_create.txt"))
+    end
+
+    test "HandleFileArgument authorizes replace reads and destroys with the caller actor" do
+      old_path = Path.join(System.tmp_dir!(), "ash_storage_policy_old.txt")
+      new_path = Path.join(System.tmp_dir!(), "ash_storage_policy_new.txt")
+      File.write!(old_path, "old policy content")
+      File.write!(new_path, "new policy content")
+
+      post =
+        AshStorage.Test.PolicyRequiredPost
+        |> Ash.Changeset.for_create(
+          :create_with_image,
+          %{
+            title: "policy replacement",
+            cover_image: Ash.Type.File.from_path(old_path)
+          },
+          actor: :authorized
+        )
+        |> Ash.create!()
+
+      post = Ash.load!(post, [cover_image: :blob], actor: :authorized)
+      old_key = post.cover_image.blob.key
+
+      assert {:ok, replaced} =
+               post
+               |> Ash.Changeset.for_update(
+                 :replace_image,
+                 %{cover_image: Ash.Type.File.from_path(new_path)},
+                 actor: :authorized
+               )
+               |> Ash.update()
+
+      replaced = Ash.load!(replaced, [cover_image: :blob], actor: :authorized)
+      assert replaced.cover_image.blob.filename == "ash_storage_policy_new.txt"
+      refute AshStorage.Service.Test.exists?(old_key)
+    after
+      File.rm(Path.join(System.tmp_dir!(), "ash_storage_policy_old.txt"))
+      File.rm(Path.join(System.tmp_dir!(), "ash_storage_policy_new.txt"))
+    end
+
+    test "replacement keeps the previous object when the transaction rolls back" do
+      old_path = Path.join(System.tmp_dir!(), "ash_storage_rollback_old.txt")
+      new_path = Path.join(System.tmp_dir!(), "ash_storage_rollback_new.txt")
+      File.write!(old_path, "old rollback content")
+      File.write!(new_path, "new rollback content")
+
+      post =
+        AshStorage.Test.PolicyRequiredPost
+        |> Ash.Changeset.for_create(
+          :create_with_image,
+          %{
+            title: "rollback replacement",
+            cover_image: Ash.Type.File.from_path(old_path)
+          },
+          actor: :authorized
+        )
+        |> Ash.create!()
+        |> Ash.load!([cover_image: :blob], actor: :authorized)
+
+      old_key = post.cover_image.blob.key
+      assert AshStorage.Service.Test.exists?(old_key)
+
+      assert {:error, _} =
+               post
+               |> Ash.Changeset.for_update(
+                 :replace_image_then_fail,
+                 %{cover_image: Ash.Type.File.from_path(new_path)},
+                 actor: :authorized
+               )
+               |> Ash.update()
+
+      assert AshStorage.Service.Test.exists?(old_key)
+    after
+      File.rm(Path.join(System.tmp_dir!(), "ash_storage_rollback_old.txt"))
+      File.rm(Path.join(System.tmp_dir!(), "ash_storage_rollback_new.txt"))
+    end
+  end
+
   describe "end-to-end with URL" do
     test "create, load attachment URL" do
       path = Path.join(System.tmp_dir!(), "ash_storage_url_test.png")

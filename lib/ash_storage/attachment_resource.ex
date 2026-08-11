@@ -22,7 +22,7 @@ defmodule AshStorage.AttachmentResource do
 
         attachment do
           blob_resource MyApp.Storage.Blob
-          belongs_to_resource :post, MyApp.Post
+          belongs_to_resource :post, MyApp.Post, allow_nil?: false
         end
       end
 
@@ -60,6 +60,8 @@ defmodule AshStorage.AttachmentResource do
 
   Per `belongs_to_resource` declaration:
   - A `belongs_to` relationship to the specified resource
+  - Parent relationships are nullable by default for multi-parent attachment
+    tables. Set `allow_nil?: false` for strict single-parent ownership.
 
   ## Actions
 
@@ -70,7 +72,7 @@ defmodule AshStorage.AttachmentResource do
 
   defmodule BelongsToResource do
     @moduledoc "Represents a belongs_to_resource declaration on an attachment resource."
-    defstruct [:name, :resource, :attribute_type, :__spark_metadata__]
+    defstruct [:name, :resource, :attribute_type, :allow_nil?, :__spark_metadata__]
   end
 
   @belongs_to_resource %Spark.Dsl.Entity{
@@ -80,7 +82,8 @@ defmodule AshStorage.AttachmentResource do
       "Declares a belongs_to relationship to a parent resource, creating a proper foreign key.",
     examples: [
       "belongs_to_resource :post, MyApp.Post",
-      "belongs_to_resource :post, MyApp.Post, attribute_type: :integer"
+      "belongs_to_resource :post, MyApp.Post, attribute_type: :integer",
+      "belongs_to_resource :post, MyApp.Post, allow_nil?: false"
     ],
     schema: [
       name: [
@@ -98,6 +101,13 @@ defmodule AshStorage.AttachmentResource do
         required: false,
         doc:
           "The type of the generated FK attribute. Defaults to `:uuid`. Set to `:integer` if the parent resource uses `integer_primary_key`."
+      ],
+      allow_nil?: [
+        type: :boolean,
+        required: false,
+        default: true,
+        doc:
+          "Whether the generated parent relationship and foreign-key attribute may be nil. Keep the default for multi-parent attachments; set to false for strict single-parent ownership."
       ]
     ],
     target: BelongsToResource
