@@ -65,7 +65,9 @@ When the argument is `nil`, the change is skipped and no file is attached.
 
 **Before action:** Uploads the file to storage, creates the blob record, runs eager analyzers, and applies any `write_attributes` to the changeset via `force_change_attributes`. This means analyzer-derived attributes are set in the same database write as the parent record — no extra update query.
 
-**After action:** Creates the attachment record linking the blob to the now-persisted parent record. For `has_one_attached` on update actions, replaces any existing attachment (purging the old file). Triggers oban analyzers if configured.
+**After action:** Creates the attachment record linking the blob to the now-persisted parent record. For `has_one_attached` on update actions, replaces the existing attachment and blob rows inside the database transaction. Triggers oban analyzers if configured.
+
+**After transaction:** Once the database transaction succeeds, deletes any storage object superseded by a `has_one_attached` replacement. A rollback therefore keeps the previous object intact.
 
 ## Filename and content type
 

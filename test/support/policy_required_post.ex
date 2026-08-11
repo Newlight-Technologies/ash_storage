@@ -39,6 +39,17 @@ defmodule AshStorage.Test.PolicyRequiredPost do
       change {AshStorage.Changes.HandleFileArgument,
               argument: :cover_image, attachment: :cover_image}
     end
+
+    update :replace_image_then_fail do
+      require_atomic? false
+      accept []
+      argument :cover_image, :file, allow_nil?: false
+
+      change {AshStorage.Changes.HandleFileArgument,
+              argument: :cover_image, attachment: :cover_image}
+
+      change AshStorage.Test.FailAfterAction
+    end
   end
 
   policies do

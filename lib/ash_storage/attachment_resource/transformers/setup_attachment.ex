@@ -59,19 +59,20 @@ defmodule AshStorage.AttachmentResource.Transformers.SetupAttachment do
       Enum.reduce(belongs_to_resources, {:ok, dsl_state}, fn %{
                                                                name: name,
                                                                resource: resource,
-                                                               attribute_type: attribute_type
+                                                               attribute_type: attribute_type,
+                                                               allow_nil?: allow_nil?
                                                              },
                                                              {:ok, dsl_state} ->
         opts =
           if attribute_type do
             [
-              allow_nil?: true,
+              allow_nil?: allow_nil?,
               public?: true,
               attribute_writable?: true,
               attribute_type: attribute_type
             ]
           else
-            [allow_nil?: true, public?: true, attribute_writable?: true]
+            [allow_nil?: allow_nil?, public?: true, attribute_writable?: true]
           end
 
         Ash.Resource.Builder.add_relationship(dsl_state, :belongs_to, name, resource, opts)

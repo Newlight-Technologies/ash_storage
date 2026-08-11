@@ -216,6 +216,43 @@ defmodule AshStorage.FileArgumentTest do
       File.rm(Path.join(System.tmp_dir!(), "ash_storage_policy_old.txt"))
       File.rm(Path.join(System.tmp_dir!(), "ash_storage_policy_new.txt"))
     end
+
+    test "replacement keeps the previous object when the transaction rolls back" do
+      old_path = Path.join(System.tmp_dir!(), "ash_storage_rollback_old.txt")
+      new_path = Path.join(System.tmp_dir!(), "ash_storage_rollback_new.txt")
+      File.write!(old_path, "old rollback content")
+      File.write!(new_path, "new rollback content")
+
+      post =
+        AshStorage.Test.PolicyRequiredPost
+        |> Ash.Changeset.for_create(
+          :create_with_image,
+          %{
+            title: "rollback replacement",
+            cover_image: Ash.Type.File.from_path(old_path)
+          },
+          actor: :authorized
+        )
+        |> Ash.create!()
+        |> Ash.load!([cover_image: :blob], actor: :authorized)
+
+      old_key = post.cover_image.blob.key
+      assert AshStorage.Service.Test.exists?(old_key)
+
+      assert {:error, _} =
+               post
+               |> Ash.Changeset.for_update(
+                 :replace_image_then_fail,
+                 %{cover_image: Ash.Type.File.from_path(new_path)},
+                 actor: :authorized
+               )
+               |> Ash.update()
+
+      assert AshStorage.Service.Test.exists?(old_key)
+    after
+      File.rm(Path.join(System.tmp_dir!(), "ash_storage_rollback_old.txt"))
+      File.rm(Path.join(System.tmp_dir!(), "ash_storage_rollback_new.txt"))
+    end
   end
 
   describe "end-to-end with URL" do
