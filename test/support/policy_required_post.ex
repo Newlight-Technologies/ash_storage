@@ -17,6 +17,7 @@ defmodule AshStorage.Test.PolicyRequiredPost do
     attachment_resource(AshStorage.Test.PolicyRequiredAttachment)
 
     has_one_attached(:cover_image)
+    has_many_attached(:documents, dependent: :detach)
   end
 
   actions do
