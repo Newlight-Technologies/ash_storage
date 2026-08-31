@@ -42,5 +42,25 @@ defmodule AshStorage.Test.PgPost do
       change {AshStorage.Changes.Attach, attachment_name: :cover_image}
       change AshStorage.Test.FailAfterAction
     end
+
+    update :attach_cover_image_blob do
+      require_atomic? false
+      accept []
+      argument :cover_image_blob_id, :uuid, allow_nil?: false
+
+      change {AshStorage.Changes.AttachBlob,
+              argument: :cover_image_blob_id, attachment: :cover_image}
+    end
+
+    update :attach_cover_image_blob_then_fail do
+      require_atomic? false
+      accept []
+      argument :cover_image_blob_id, :uuid, allow_nil?: false
+
+      change {AshStorage.Changes.AttachBlob,
+              argument: :cover_image_blob_id, attachment: :cover_image}
+
+      change AshStorage.Test.FailAfterAction
+    end
   end
 end
