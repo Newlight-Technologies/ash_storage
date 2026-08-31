@@ -4,34 +4,49 @@ defmodule AshStorage.BlobResource.Changes.PurgeFile do
 
   This is used by the `:purge_blob` action on blob resources. It loads
   the `parsed_service_opts` calculation to reconstitute the service options
-  from the stored map, then deletes the file before the record is destroyed.
+  from the stored map, destroys the database row inside the transaction, and
+  deletes the file only after the transaction succeeds.
   """
   use Ash.Resource.Change
 
+  @context_key :__ash_storage_file_to_purge__
+
   @impl true
-  def change(changeset, _opts, _context) do
-    Ash.Changeset.before_action(changeset, fn changeset ->
-      blob = changeset.data |> Ash.load!(:parsed_service_opts)
-      service_mod = blob.service_name
-      service_opts = blob.parsed_service_opts || []
+  def change(changeset, _opts, context) do
+    context_opts = Ash.Context.to_opts(context)
 
-      ctx = AshStorage.Service.Context.new(service_opts)
+    changeset
+    |> Ash.Changeset.before_action(fn changeset ->
+      blob = Ash.load!(changeset.data, :parsed_service_opts, context_opts)
 
-      case service_mod.delete(blob.key, ctx) do
-        :ok ->
-          changeset
+      service_context =
+        AshStorage.Service.Context.new(blob.parsed_service_opts || [],
+          actor: Keyword.get(context_opts, :actor),
+          tenant: Keyword.get(context_opts, :tenant)
+        )
 
-        {:error, reason} ->
-          Ash.Changeset.add_error(
-            changeset,
-            "Failed to delete file from storage: #{inspect(reason)}"
-          )
-      end
+      Ash.Changeset.put_context(
+        changeset,
+        @context_key,
+        {blob.service_name, service_context, blob.key}
+      )
     end)
+    |> Ash.Changeset.after_transaction(&delete_file/2)
   end
 
   @impl true
   def atomic(changeset, opts, context) do
     {:ok, change(changeset, opts, context)}
   end
+
+  defp delete_file(changeset, {:ok, record}) do
+    {service_mod, service_context, key} = changeset.context[@context_key]
+
+    case service_mod.delete(key, service_context) do
+      :ok -> {:ok, record}
+      {:error, reason} -> {:error, "Failed to delete file from storage: #{inspect(reason)}"}
+    end
+  end
+
+  defp delete_file(_changeset, {:error, error}), do: {:error, error}
 end

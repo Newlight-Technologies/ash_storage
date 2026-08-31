@@ -108,6 +108,29 @@ defmodule AshStorage.OperationsTest do
       assert {:ok, "new file"} = AshStorage.Service.Test.download(new_blob.key, [])
     end
 
+    test "removes a newly uploaded object when the attach transaction rolls back" do
+      :ok = Ecto.Adapters.SQL.Sandbox.checkout(AshStorage.TestRepo)
+
+      post =
+        AshStorage.Test.PgPost
+        |> Ash.Changeset.for_create(:create, %{title: "failed attach"})
+        |> Ash.create!()
+
+      keys_before = AshStorage.Service.Test.list_keys()
+
+      assert {:error, _} =
+               post
+               |> Ash.Changeset.for_update(:attach_cover_image_then_fail, %{
+                 io: "orphan candidate",
+                 filename: "rollback.txt",
+                 content_type: "text/plain"
+               })
+               |> Ash.update()
+
+      assert AshStorage.Service.Test.list_keys() == keys_before
+      assert Ash.load!(post, :cover_image).cover_image == nil
+    end
+
     test "appends to has_many_attached" do
       post = create_post!()
 

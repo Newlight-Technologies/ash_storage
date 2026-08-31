@@ -155,6 +155,58 @@ defmodule AshStorage.DirectUploadTest do
       assert post.cover_image.blob.filename == "new.jpg"
     end
 
+    test "keeps the previous object on rollback and purges it after a successful retry" do
+      :ok = Ecto.Adapters.SQL.Sandbox.checkout(AshStorage.TestRepo)
+
+      post =
+        AshStorage.Test.PgPost
+        |> Ash.Changeset.for_create(:create, %{title: "direct replacement rollback"})
+        |> Ash.create!()
+
+      {:ok, %{blob: old_blob}} =
+        Operations.attach(post, :cover_image, "old direct data", filename: "old-direct.jpg")
+
+      {:ok, %{blob: new_blob}} =
+        Operations.prepare_direct_upload(AshStorage.Test.PgPost, :cover_image,
+          filename: "new-direct.jpg",
+          content_type: "image/jpeg",
+          byte_size: 15
+        )
+
+      :ok =
+        AshStorage.Service.Test.upload(
+          new_blob.key,
+          "new direct data",
+          AshStorage.Service.Context.new([])
+        )
+
+      assert {:error, _} =
+               post
+               |> Ash.Changeset.for_update(:attach_cover_image_blob_then_fail, %{
+                 cover_image_blob_id: new_blob.id
+               })
+               |> Ash.update()
+
+      assert AshStorage.Service.Test.exists?(old_blob.key)
+      assert AshStorage.Service.Test.exists?(new_blob.key)
+
+      rolled_back = Ash.load!(post, cover_image: :blob)
+      assert rolled_back.cover_image.blob_id == old_blob.id
+
+      assert {:ok, replaced} =
+               post
+               |> Ash.Changeset.for_update(:attach_cover_image_blob, %{
+                 cover_image_blob_id: new_blob.id
+               })
+               |> Ash.update()
+
+      refute AshStorage.Service.Test.exists?(old_blob.key)
+      assert AshStorage.Service.Test.exists?(new_blob.key)
+
+      replaced = Ash.load!(replaced, cover_image: :blob)
+      assert replaced.cover_image.blob_id == new_blob.id
+    end
+
     test "appends to has_many" do
       post = create_post!()
 

@@ -5,6 +5,7 @@ defmodule AshStorage.AttachmentResourceTest do
   alias AshStorage.Test.IntegerAttachment
   alias AshStorage.Test.MultiAttachment
   alias AshStorage.Test.PolymorphicAttachment
+  alias AshStorage.Test.RestrictFkTestAttachment
 
   describe "belongs_to_resource" do
     test "has name attribute" do
@@ -116,6 +117,25 @@ defmodule AshStorage.AttachmentResourceTest do
     test "defaults to UUID type when attribute_type is not set" do
       attr = Ash.Resource.Info.attribute(Attachment, :post_id)
       assert attr.type == Ash.Type.UUID
+    end
+  end
+
+  describe "belongs_to_resource with strict ownership" do
+    test "generates a non-null parent foreign key" do
+      relationship =
+        Ash.Resource.Info.relationship(
+          RestrictFkTestAttachment,
+          :restrict_fk_test_post
+        )
+
+      attribute =
+        Ash.Resource.Info.attribute(
+          RestrictFkTestAttachment,
+          :restrict_fk_test_post_id
+        )
+
+      refute relationship.allow_nil?
+      refute attribute.allow_nil?
     end
   end
 

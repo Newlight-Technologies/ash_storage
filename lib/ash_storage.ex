@@ -49,6 +49,7 @@ defmodule AshStorage do
 
   @analyzer %Spark.Dsl.Entity{
     name: :analyzer,
+    no_depend_modules: [:module],
     args: [:module],
     describe: "Declares an analyzer to run on uploaded files for this attachment.",
     examples: [
@@ -62,6 +63,7 @@ defmodule AshStorage do
 
   @variant %Spark.Dsl.Entity{
     name: :variant,
+    no_depend_modules: [:module],
     args: [:name, :module],
     describe: "Declares a named variant transformation for this attachment.",
     examples: [
@@ -75,6 +77,7 @@ defmodule AshStorage do
 
   @has_one_attached %Spark.Dsl.Entity{
     name: :has_one_attached,
+    no_depend_modules: [:service],
     args: [:name],
     describe: "Declares a single file attachment on this resource.",
     examples: [
@@ -92,6 +95,7 @@ defmodule AshStorage do
 
   @has_many_attached %Spark.Dsl.Entity{
     name: :has_many_attached,
+    no_depend_modules: [:service],
     args: [:name],
     describe: "Declares a collection of file attachments on this resource.",
     examples: [
@@ -109,6 +113,7 @@ defmodule AshStorage do
 
   @storage %Spark.Dsl.Section{
     name: :storage,
+    no_depend_modules: [:blob_resource, :attachment_resource, :service],
     describe: "Configure file storage and attachments for this resource.",
     schema: [
       service: [

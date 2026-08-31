@@ -182,7 +182,9 @@ storage do
 end
 ```
 
-File deletion happens outside the database transaction, so a failed file delete won't roll back the record destroy.
+Database rows are removed inside the transaction; storage objects are deleted only after it
+commits. A failed object delete therefore cannot restore the database rows, but the operation
+returns an error that identifies the object requiring reconciliation.
 
 Soft destroy actions (where `action.soft?` is true) skip dependent attachment handling entirely.
 
@@ -340,7 +342,10 @@ The S3 suite starts MinIO with Docker. The Azure suite starts Azurite with Docke
 - **Checksum verification (partial)**~~ ✅ — Server-side uploads send `Content-MD5` so S3/Azure reject corrupted bodies at the edge; Azure also persists the MD5 via `x-ms-blob-content-md5`. Direct uploads are auto-confirmed by `AttachBlob` against `Service.head/2` before linking. Downloads verified via `Operations.download/2`. Multipart/block-based verification is documented in `documentation/topics/checksum-verification.md` and ships when multipart upload itself does.
 - ~~**Redirect handler**~~ ✅ — `AshStorage.Plug.Redirect` issues an HTTP redirect (default 302) to the underlying service's `url/2` instead of streaming bytes. Useful when you want app-level auth/signature checks but don't want to proxy bytes through the application. Supports the same `?token=&expires=` HMAC verification as `AshStorage.Plug.Proxy`, and forwards `?disposition=&filename=` query params into service opts so backends like S3/Azure can encode them into presigned URLs.
 - ~~**Mirroring**~~ ✅ — `AshStorage.Service.Mirror` fans `upload`/`delete` out across an ordered list of child services for redundancy. Reads consult the primary first and fall through to secondaries on `:not_found`. `url/2` and `direct_upload/2` go through the primary. Strict, sequential, fail-fast.
-- **Orphan cleanup** — Periodic cleanup of blobs without files or files without blobs. With AshOban: scheduled job. Without: manual invocation via `AshStorage.Operations.cleanup_orphans/1`.
+- **Orphan reconciliation** — Failed attach transactions synchronously remove newly uploaded
+  objects, including eager variants, and report any cleanup failure with its storage key. A
+  periodic scanner for pre-existing drift (blobs without files or files without blobs) remains
+  future work.
 
 ### Azure Blob Storage follow-ups
 

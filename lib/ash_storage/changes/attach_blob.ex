@@ -14,8 +14,9 @@ defmodule AshStorage.Changes.AttachBlob do
                 argument: :cover_image_blob_id, attachment: :cover_image}
       end
 
-  For `has_one_attached`, replaces any existing attachment (purging the old file).
-  For `has_many_attached`, appends.
+  For `has_one_attached`, replaces any existing attachment and purges the old
+  file only after the owner transaction commits. For `has_many_attached`,
+  appends.
 
   ## Options
 
@@ -26,6 +27,7 @@ defmodule AshStorage.Changes.AttachBlob do
 
   require Ash.Query
 
+  alias AshStorage.Changes.PurgeFilesAfterTransaction
   alias AshStorage.Info
   alias AshStorage.Service.Context
 
@@ -47,7 +49,8 @@ defmodule AshStorage.Changes.AttachBlob do
     argument_name = opts[:argument]
     attachment_name = opts[:attachment]
 
-    Ash.Changeset.after_action(changeset, fn _changeset, record ->
+    changeset
+    |> Ash.Changeset.after_action(fn changeset, record ->
       blob_id = Ash.Changeset.get_argument(changeset, argument_name)
 
       if is_nil(blob_id) do
@@ -61,7 +64,7 @@ defmodule AshStorage.Changes.AttachBlob do
              ctx = build_context(service_opts, resource, attachment_def, changeset),
              {:ok, blob} <- fetch_blob(resource, blob_id, context_opts),
              {:ok, blob} <- verify_blob(blob, service_mod, ctx, context_opts),
-             {:ok, _} <-
+             {:ok, keys_to_purge} <-
                maybe_replace_existing(record, attachment_def, service_mod, ctx, context_opts),
              {:ok, attachment} <-
                create_attachment(record, attachment_def, blob, context_opts) do
@@ -69,11 +72,13 @@ defmodule AshStorage.Changes.AttachBlob do
             record
             |> Ash.Resource.put_metadata(:"#{attachment_name}_blob", blob)
             |> Ash.Resource.put_metadata(:"#{attachment_name}_attachment", attachment)
+            |> PurgeFilesAfterTransaction.put_record(keys_to_purge)
 
           {:ok, record}
         end
       end
     end)
+    |> Ash.Changeset.after_transaction(&PurgeFilesAfterTransaction.run/2)
   end
 
   defp resolve_service(resource, attachment_def) do
@@ -147,13 +152,13 @@ defmodule AshStorage.Changes.AttachBlob do
          context_opts
        ) do
     case find_attachments(record, attachment_def, context_opts) do
-      {:ok, []} -> {:ok, :noop}
+      {:ok, []} -> {:ok, []}
       {:ok, existing} -> purge_attachments(existing, service_mod, ctx, context_opts)
     end
   end
 
   defp maybe_replace_existing(_record, %{type: :many}, _service_mod, _ctx, _context_opts),
-    do: {:ok, :noop}
+    do: {:ok, []}
 
   # sobelow_skip ["DOS.BinToAtom"]
   defp create_attachment(record, attachment_def, blob, context_opts) do
@@ -227,10 +232,9 @@ defmodule AshStorage.Changes.AttachBlob do
     Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, acc} ->
       blob = att.blob
 
-      with :ok <- service_mod.delete(blob.key, ctx),
-           {:ok, _} <- Ash.destroy(att, destroy_opts),
+      with {:ok, _} <- Ash.destroy(att, destroy_opts),
            {:ok, _} <- Ash.destroy(blob, destroy_opts) do
-        {:cont, {:ok, [att | acc]}}
+        {:cont, {:ok, [{service_mod, ctx, blob.key} | acc]}}
       else
         {:error, error} -> {:halt, {:error, error}}
       end

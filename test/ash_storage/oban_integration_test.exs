@@ -79,6 +79,28 @@ defmodule AshStorage.ObanIntegrationTest do
       refute AshStorage.Service.Test.exists?(blob.key)
       assert {:error, _} = Ash.get(PgBlob, blob.id)
     end
+
+    test "keeps the blob row and file when the destroy transaction rolls back" do
+      post = create_post!()
+
+      {:ok, %{blob: blob}} =
+        AshStorage.Operations.attach(post, :cover_image, "rollback data",
+          filename: "rollback.txt"
+        )
+
+      AshStorage.Operations.detach(post, :cover_image)
+
+      assert {:error, _} =
+               blob
+               |> Ash.Changeset.for_destroy(:purge_blob)
+               |> Ash.Changeset.after_action(fn _changeset, _record ->
+                 {:error, "forced rollback after blob destroy"}
+               end)
+               |> Ash.destroy()
+
+      assert {:ok, _} = Ash.get(PgBlob, blob.id)
+      assert AshStorage.Service.Test.exists?(blob.key)
+    end
   end
 
   describe "async dependent purge" do
