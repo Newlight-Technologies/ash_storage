@@ -23,13 +23,21 @@ defmodule AshStorage.Changes.HandleFileArgument do
     if is_nil(file) do
       changeset
     else
+      rollback_ref = make_ref()
+
       changeset
+      |> Ash.Changeset.around_transaction(
+        &PurgeFilesAfterTransaction.with_rollback_tracking(&1, &2, rollback_ref),
+        prepend?: true
+      )
       |> Ash.Changeset.before_action(fn changeset ->
         resource = changeset.resource
         context_opts = Keyword.put(context_opts, :tenant, changeset.tenant)
 
         case upload_blob(resource, attachment_name, file, changeset, context_opts) do
           {:ok, attrs_to_write, context} ->
+            PurgeFilesAfterTransaction.track_rollback(rollback_ref, context.uploaded_file)
+
             changeset
             |> Ash.Changeset.force_change_attributes(attrs_to_write)
             |> Ash.Changeset.put_context(
@@ -77,6 +85,12 @@ defmodule AshStorage.Changes.HandleFileArgument do
             {:ok, record}
         end
       end)
+      |> Ash.Changeset.after_transaction(
+        fn _changeset, result ->
+          PurgeFilesAfterTransaction.cleanup_rollback(rollback_ref, result)
+        end,
+        prepend?: true
+      )
       |> Ash.Changeset.after_transaction(&PurgeFilesAfterTransaction.run/2)
     end
   end
@@ -102,20 +116,33 @@ defmodule AshStorage.Changes.HandleFileArgument do
       ctx = build_context(service_opts, resource, attachment_def, changeset)
       key = AshStorage.resolve_key(attachment_def, ctx, changeset)
 
-      with {:ok, blob} <-
-             upload_and_create_blob(resource, service_mod, ctx, file, context_opts,
-               key: key,
-               filename: filename,
-               content_type: content_type
-             ),
-           {:ok, blob, attrs_to_write} <-
-             run_analyzers(blob, attachment_def, changeset.data, file, context_opts) do
-        {:ok, attrs_to_write,
-         %{
-           blob: blob,
-           attachment_def: attachment_def,
-           has_oban_analyzers?: has_oban_analyzers?(attachment_def)
-         }}
+      case upload_and_create_blob(resource, service_mod, ctx, file, context_opts,
+             key: key,
+             filename: filename,
+             content_type: content_type
+           ) do
+        {:ok, blob, upload_ctx} ->
+          uploaded_file = {service_mod, upload_ctx, blob.key}
+
+          case run_analyzers(blob, attachment_def, changeset.data, file, context_opts) do
+            {:ok, blob, attrs_to_write} ->
+              {:ok, attrs_to_write,
+               %{
+                 blob: blob,
+                 attachment_def: attachment_def,
+                 uploaded_file: uploaded_file,
+                 has_oban_analyzers?: has_oban_analyzers?(attachment_def)
+               }}
+
+            {:error, error} ->
+              cleanup_failed_upload(error, uploaded_file)
+          end
+
+        {:error, error, uploaded_file} ->
+          cleanup_failed_upload(error, uploaded_file)
+
+        {:error, error} ->
+          {:error, error}
       end
     end
   end
@@ -359,7 +386,19 @@ defmodule AshStorage.Changes.HandleFileArgument do
         }
         |> Map.merge(extra_blob_attrs)
 
-      Ash.create(blob_resource, blob_attrs, Keyword.merge(context_opts, action: :create))
+      uploaded_file = {service_mod, ctx, key}
+
+      case Ash.create(blob_resource, blob_attrs, Keyword.merge(context_opts, action: :create)) do
+        {:ok, blob} -> {:ok, blob, ctx}
+        {:error, error} -> {:error, error, uploaded_file}
+      end
+    end
+  end
+
+  defp cleanup_failed_upload(error, uploaded_file) do
+    case PurgeFilesAfterTransaction.purge_now([uploaded_file]) do
+      [] -> {:error, error}
+      failures -> {:error, {error, {:upload_cleanup_failed, failures}}}
     end
   end
 

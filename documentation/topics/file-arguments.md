@@ -67,7 +67,11 @@ When the argument is `nil`, the change is skipped and no file is attached.
 
 **After action:** Creates the attachment record linking the blob to the now-persisted parent record. For `has_one_attached` on update actions, replaces the existing attachment and blob rows inside the database transaction. Triggers oban analyzers if configured.
 
-**After transaction:** Once the database transaction succeeds, deletes any storage object superseded by a `has_one_attached` replacement. A rollback therefore keeps the previous object intact.
+**After transaction:** Once the database transaction succeeds, deletes any storage object
+superseded by a `has_one_attached` replacement. If the transaction rolls back, deletes the newly
+uploaded object instead. A failed replacement therefore keeps the previous database rows and
+object intact without orphaning the attempted upload. Cleanup uses the same service, actor, and
+tenant context as the upload; a failed cleanup is logged with the storage key for reconciliation.
 
 ## Filename and content type
 

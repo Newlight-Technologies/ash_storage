@@ -238,6 +238,7 @@ defmodule AshStorage.FileArgumentTest do
 
       old_key = post.cover_image.blob.key
       assert AshStorage.Service.Test.exists?(old_key)
+      keys_before = AshStorage.Service.Test.list_keys()
 
       assert {:error, _} =
                post
@@ -249,9 +250,58 @@ defmodule AshStorage.FileArgumentTest do
                |> Ash.update()
 
       assert AshStorage.Service.Test.exists?(old_key)
+      assert AshStorage.Service.Test.list_keys() == keys_before
     after
       File.rm(Path.join(System.tmp_dir!(), "ash_storage_rollback_old.txt"))
       File.rm(Path.join(System.tmp_dir!(), "ash_storage_rollback_new.txt"))
+    end
+
+    test "failed PostgreSQL replacement rolls back rows and the next retry succeeds" do
+      :ok = Ecto.Adapters.SQL.Sandbox.checkout(AshStorage.TestRepo)
+
+      old_path = Path.join(System.tmp_dir!(), "ash_storage_pg_rollback_old.txt")
+      new_path = Path.join(System.tmp_dir!(), "ash_storage_pg_rollback_new.txt")
+      File.write!(old_path, "old pg rollback content")
+      File.write!(new_path, "new pg rollback content")
+
+      post =
+        AshStorage.Test.RestrictFkTestPost
+        |> Ash.Changeset.for_create(:create, %{title: "pg rollback replacement"})
+        |> Ash.create!()
+
+      assert {:ok, %{blob: old_blob}} =
+               AshStorage.Operations.attach(post, :cover_image, "old pg rollback content",
+                 filename: "ash_storage_pg_rollback_old.txt"
+               )
+
+      keys_before = AshStorage.Service.Test.list_keys()
+
+      assert {:error, _} =
+               post
+               |> Ash.Changeset.for_update(:replace_image_then_fail, %{
+                 cover_image: Ash.Type.File.from_path(new_path)
+               })
+               |> Ash.update()
+
+      assert AshStorage.Service.Test.list_keys() == keys_before
+
+      persisted = Ash.load!(post, cover_image: :blob)
+      assert persisted.cover_image.blob.key == old_blob.key
+
+      assert {:ok, replaced} =
+               persisted
+               |> Ash.Changeset.for_update(:replace_image, %{
+                 cover_image: Ash.Type.File.from_path(new_path)
+               })
+               |> Ash.update()
+
+      replaced = Ash.load!(replaced, cover_image: :blob)
+      refute replaced.cover_image.blob.key == old_blob.key
+      refute AshStorage.Service.Test.exists?(old_blob.key)
+      assert AshStorage.Service.Test.exists?(replaced.cover_image.blob.key)
+    after
+      File.rm(Path.join(System.tmp_dir!(), "ash_storage_pg_rollback_old.txt"))
+      File.rm(Path.join(System.tmp_dir!(), "ash_storage_pg_rollback_new.txt"))
     end
   end
 

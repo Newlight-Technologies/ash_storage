@@ -30,5 +30,17 @@ defmodule AshStorage.Test.PgPost do
 
   actions do
     defaults [:read, :destroy, create: [:title], update: [:title]]
+
+    update :attach_cover_image_then_fail do
+      require_atomic? false
+      accept []
+      argument :io, :term, allow_nil?: false
+      argument :filename, :string, allow_nil?: false
+      argument :content_type, :string, default: "application/octet-stream"
+      argument :metadata, :map, default: %{}
+
+      change {AshStorage.Changes.Attach, attachment_name: :cover_image}
+      change AshStorage.Test.FailAfterAction
+    end
   end
 end

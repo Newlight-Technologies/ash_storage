@@ -2,6 +2,7 @@ defmodule AshStorage.VariantGenerator do
   @moduledoc false
 
   alias AshStorage.Info
+  alias AshStorage.Changes.PurgeFilesAfterTransaction
   alias AshStorage.Service.Context
   alias AshStorage.VariantDefinition
 
@@ -11,21 +12,39 @@ defmodule AshStorage.VariantGenerator do
   Downloads the source, runs the transform, uploads the result, and creates a variant blob record.
   Returns `{:ok, variant_blob}` or `{:error, reason}`.
   """
-  def generate(source_blob, variant_def, resource, attachment_def) do
+  def generate(source_blob, variant_def, resource, attachment_def, action_opts \\ []) do
     {module, opts} = VariantDefinition.normalize(variant_def)
     digest = VariantDefinition.digest(variant_def)
     content_type = source_blob.content_type || "application/octet-stream"
 
     if module.accept?(content_type) do
-      do_generate(source_blob, module, opts, digest, variant_def.name, resource, attachment_def)
+      do_generate(
+        source_blob,
+        module,
+        opts,
+        digest,
+        variant_def.name,
+        resource,
+        attachment_def,
+        action_opts
+      )
     else
       {:error, :not_accepted}
     end
   end
 
-  defp do_generate(source_blob, module, opts, digest, variant_name, resource, attachment_def) do
+  defp do_generate(
+         source_blob,
+         module,
+         opts,
+         digest,
+         variant_name,
+         resource,
+         attachment_def,
+         action_opts
+       ) do
     with {:ok, {service_mod, service_opts}} <- resolve_service(resource, attachment_def),
-         {:ok, source_data} <- AshStorage.Operations.download(source_blob),
+         {:ok, source_data} <- AshStorage.Operations.download(source_blob, action_opts),
          {:ok, transform_result, variant_data} <- run_transform(module, opts, source_data) do
       upload_and_create_variant(
         source_blob,
@@ -36,7 +55,8 @@ defmodule AshStorage.VariantGenerator do
         resource,
         service_mod,
         service_opts,
-        attachment_def
+        attachment_def,
+        action_opts
       )
     end
   end
@@ -75,7 +95,8 @@ defmodule AshStorage.VariantGenerator do
          resource,
          service_mod,
          service_opts,
-         attachment_def
+         attachment_def,
+         action_opts
        ) do
     key = AshStorage.resolve_variant_key(source_blob.key)
     checksum = :crypto.hash(:md5, variant_data) |> Base.encode64()
@@ -94,7 +115,9 @@ defmodule AshStorage.VariantGenerator do
     ctx =
       Context.new(service_opts,
         resource: resource,
-        attachment: attachment_def
+        attachment: attachment_def,
+        actor: action_opts[:actor],
+        tenant: action_opts[:tenant]
       )
 
     ctx = Context.put_expected_md5(ctx, checksum)
@@ -117,7 +140,26 @@ defmodule AshStorage.VariantGenerator do
         }
         |> Map.merge(extra_blob_attrs)
 
-      Ash.create(blob_resource, blob_attrs, action: :create_variant)
+      uploaded_file = {service_mod, ctx, key}
+
+      case Ash.create(
+             blob_resource,
+             blob_attrs,
+             Keyword.merge(action_opts, action: :create_variant)
+           ) do
+        {:ok, variant_blob} ->
+          {:ok, variant_blob}
+
+        {:error, error} ->
+          cleanup_failed_upload(error, uploaded_file)
+      end
+    end
+  end
+
+  defp cleanup_failed_upload(error, uploaded_file) do
+    case PurgeFilesAfterTransaction.purge_now([uploaded_file]) do
+      [] -> {:error, error}
+      failures -> {:error, {error, {:upload_cleanup_failed, failures}}}
     end
   end
 
