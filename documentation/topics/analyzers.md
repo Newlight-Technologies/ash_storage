@@ -57,6 +57,14 @@ failure rather than proceeding without analysis. Normal callback return and
 exception cleanup is covered, but process termination can leave private scratch
 files behind; host-level cleanup remains an operational responsibility.
 
+If removal of an owned source file or directory fails, normal analyzer return
+is replaced by `analyzer_scratch_cleanup_failed` with `retryable?: false`, and
+an operator-recovery error is logged without document contents. Retrying the
+analysis cannot repair the old temporary artifact. Analyzer-created files are
+not recursively removed. If the analyzer raises or throws, its original failure
+is preserved and cleanup failure is logged. A source file already removed by the
+analyzer does not count as a cleanup failure.
+
 ## Reading analyzer results
 
 Analyzer results are stored across two blob fields:

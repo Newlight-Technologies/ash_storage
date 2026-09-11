@@ -2,6 +2,39 @@ defmodule AshStorage.AnalyzerScratchTest do
   use ExUnit.Case, async: true
 
   alias AshStorage.AnalyzerScratch
+  import ExUnit.CaptureLog
+
+  @tag :tmp_dir
+  test "cleanup failure is visible and does not delete analyzer-created files", %{tmp_dir: root} do
+    test_pid = self()
+
+    log =
+      capture_log(fn ->
+        assert {:error,
+                %AshStorage.Analyzer.Failure{
+                  code: :analyzer_scratch_cleanup_failed,
+                  retryable?: false
+                }} =
+                 AnalyzerScratch.with_file(
+                   "private evidence",
+                   fn path ->
+                     extra = Path.join(Path.dirname(path), "analyzer-owned")
+                     File.write!(extra, "diagnostic")
+                     send(test_pid, {:extra, extra, path})
+                     {:ok, %{verdict: :clean}}
+                   end,
+                   root
+                 )
+      end)
+
+    assert log =~ "scratch cleanup failed"
+    refute log =~ "private evidence"
+    assert_received {:extra, extra, source}
+    assert File.read!(extra) == "diagnostic"
+    refute File.exists?(source)
+    File.rm!(extra)
+    File.rmdir!(Path.dirname(extra))
+  end
 
   @tag :tmp_dir
   test "unavailable scratch root fails safely without invoking analyzer", %{tmp_dir: root} do
