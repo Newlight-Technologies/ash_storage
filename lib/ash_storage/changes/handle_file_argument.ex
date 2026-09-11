@@ -34,10 +34,8 @@ defmodule AshStorage.Changes.HandleFileArgument do
         resource = changeset.resource
         context_opts = Keyword.put(context_opts, :tenant, changeset.tenant)
 
-        case upload_blob(resource, attachment_name, file, changeset, context_opts) do
+        case upload_blob(resource, attachment_name, file, changeset, context_opts, rollback_ref) do
           {:ok, attrs_to_write, context} ->
-            PurgeFilesAfterTransaction.track_rollback(rollback_ref, context.uploaded_file)
-
             changeset
             |> Ash.Changeset.force_change_attributes(attrs_to_write)
             |> Ash.Changeset.put_context(
@@ -116,7 +114,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
     maybe_replace_existing(record, attachment_def, context_opts)
   end
 
-  defp upload_blob(resource, attachment_name, file, changeset, context_opts) do
+  defp upload_blob(resource, attachment_name, file, changeset, context_opts, rollback_ref) do
     {filename, content_type} = extract_file_metadata(file)
 
     with {:ok, attachment_def} <- Info.attachment(resource, attachment_name),
@@ -131,6 +129,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
            ) do
         {:ok, blob, upload_ctx, bytes} ->
           uploaded_file = {service_mod, upload_ctx, blob.key}
+          PurgeFilesAfterTransaction.track_rollback(rollback_ref, uploaded_file)
 
           case run_analyzers(blob, attachment_def, changeset.data, bytes, context_opts) do
             {:ok, blob, attrs_to_write} ->
@@ -143,7 +142,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
                }}
 
             {:error, error} ->
-              cleanup_failed_upload(error, uploaded_file)
+              {:error, error}
           end
 
         {:error, error, uploaded_file} ->

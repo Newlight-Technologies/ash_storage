@@ -28,13 +28,8 @@ defmodule AshStorage.Changes.Attach do
       record = changeset.data
       resource = record.__struct__
 
-      case do_attach(record, resource, attachment_name, changeset, context_opts) do
+      case do_attach(record, resource, attachment_name, changeset, context_opts, rollback_ref) do
         {:ok, attrs_to_write, attach_context} ->
-          PurgeFilesAfterTransaction.track_rollback(
-            rollback_ref,
-            attach_context.uploaded_file
-          )
-
           changeset
           |> Ash.Changeset.force_change_attributes(attrs_to_write)
           |> Ash.Changeset.put_context(:__ash_storage_attach__, attach_context)
@@ -98,7 +93,7 @@ defmodule AshStorage.Changes.Attach do
     |> Ash.Changeset.after_transaction(&PurgeFilesAfterTransaction.run/2)
   end
 
-  defp do_attach(record, resource, attachment_name, changeset, context_opts) do
+  defp do_attach(record, resource, attachment_name, changeset, context_opts, rollback_ref) do
     context_opts = Keyword.put(context_opts, :tenant, changeset.tenant)
     io = Ash.Changeset.get_argument(changeset, :io)
     filename = Ash.Changeset.get_argument(changeset, :filename)
@@ -121,6 +116,7 @@ defmodule AshStorage.Changes.Attach do
            ) do
         {:ok, blob, upload_ctx} ->
           uploaded_file = {service_mod, upload_ctx, blob.key}
+          PurgeFilesAfterTransaction.track_rollback(rollback_ref, uploaded_file)
 
           case run_analyzers(blob, attachment_def, record, io, context_opts) do
             {:ok, blob, attrs_to_write} ->
@@ -134,7 +130,7 @@ defmodule AshStorage.Changes.Attach do
                }}
 
             {:error, error} ->
-              cleanup_failed_upload(error, uploaded_file)
+              {:error, error}
           end
 
         {:error, error, uploaded_file} ->

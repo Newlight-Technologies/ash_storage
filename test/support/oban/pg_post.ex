@@ -29,6 +29,14 @@ defmodule AshStorage.Test.PgPost do
         write_attributes: [extracted_title: :title]
       )
     end
+
+    has_one_attached :raising_document do
+      analyzer(AshStorage.Test.RaisingAnalyzer)
+    end
+
+    has_one_attached :cleanup_document do
+      analyzer({AshStorage.Test.CleanupFailureAnalyzer, test_key: "file-argument"})
+    end
   end
 
   attributes do
@@ -55,6 +63,22 @@ defmodule AshStorage.Test.PgPost do
 
       change {AshStorage.Changes.HandleFileArgument,
               argument: :file, attachment: :analyzed_document}
+    end
+
+    create :create_with_raising_document do
+      accept [:title]
+      argument :file, Ash.Type.File, allow_nil?: false
+
+      change {AshStorage.Changes.HandleFileArgument,
+              argument: :file, attachment: :raising_document}
+    end
+
+    create :create_with_cleanup_document do
+      accept [:title]
+      argument :file, Ash.Type.File, allow_nil?: false
+
+      change {AshStorage.Changes.HandleFileArgument,
+              argument: :file, attachment: :cleanup_document}
     end
 
     update :attach_cover_image_then_fail do

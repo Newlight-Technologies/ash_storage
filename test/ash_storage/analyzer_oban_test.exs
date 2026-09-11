@@ -57,6 +57,72 @@ defmodule AshStorage.AnalyzerObanTest do
   end
 
   describe "run_analyzer/3 on Postgres" do
+    @tag :capture_log
+    test "eager attach analyzer exception leaves no uploaded object" do
+      post = create_post!()
+      counts = Enum.map([PgPost, PgBlob, AshStorage.Test.PgAttachment], &Ash.count!/1)
+      keys = AshStorage.Service.Test.list_keys()
+
+      assert_raise Ash.Error.Unknown, ~r/private scanner diagnostics/, fn ->
+        post
+        |> Ash.Changeset.for_update(
+          :attach_raising_document,
+          %{io: "private evidence", filename: "source.txt"}
+        )
+        |> Ash.update!()
+      end
+
+      assert Enum.map([PgPost, PgBlob, AshStorage.Test.PgAttachment], &Ash.count!/1) == counts
+      assert AshStorage.Service.Test.list_keys() == keys
+      refute_enqueued(worker: PgBlob.RunPendingAnalyzersWorker)
+    end
+
+    @tag :capture_log
+    test "eager file-argument cleanup failure leaves no committed rows or uploaded object" do
+      counts = Enum.map([PgPost, PgBlob, AshStorage.Test.PgAttachment], &Ash.count!/1)
+      keys = AshStorage.Service.Test.list_keys()
+      {:ok, device} = StringIO.open("private evidence")
+
+      try do
+        assert {:error, _} =
+                 PgPost
+                 |> Ash.Changeset.for_create(
+                   :create_with_cleanup_document,
+                   %{title: "not committed", file: Ash.Type.File.from_io(device)}
+                 )
+                 |> Ash.create()
+
+        assert Enum.map([PgPost, PgBlob, AshStorage.Test.PgAttachment], &Ash.count!/1) == counts
+        assert AshStorage.Service.Test.list_keys() == keys
+        refute_enqueued(worker: PgBlob.RunPendingAnalyzersWorker)
+      after
+        if extra = Process.delete({AshStorage.Test.CleanupFailureAnalyzer, "file-argument"}) do
+          File.rm!(extra)
+          File.rmdir!(Path.dirname(extra))
+        end
+      end
+    end
+
+    @tag :capture_log
+    test "eager file-argument analyzer exception leaves no uploaded object" do
+      counts = Enum.map([PgPost, PgBlob, AshStorage.Test.PgAttachment], &Ash.count!/1)
+      keys = AshStorage.Service.Test.list_keys()
+      {:ok, device} = StringIO.open("private evidence")
+
+      assert_raise Ash.Error.Unknown, ~r/private scanner diagnostics/, fn ->
+        PgPost
+        |> Ash.Changeset.for_create(
+          :create_with_raising_document,
+          %{title: "not committed", file: Ash.Type.File.from_io(device)}
+        )
+        |> Ash.create!()
+      end
+
+      assert Enum.map([PgPost, PgBlob, AshStorage.Test.PgAttachment], &Ash.count!/1) == counts
+      assert AshStorage.Service.Test.list_keys() == keys
+      refute_enqueued(worker: PgBlob.RunPendingAnalyzersWorker)
+    end
+
     test "denied file-argument analyzer target setup rolls back upload without enqueueing" do
       actor = %{restricted?: true, role: :viewer, deny_analyzer_target?: true}
       counts = Enum.map([PgPost, PgBlob, AshStorage.Test.PgAttachment], &Ash.count!/1)
@@ -67,7 +133,9 @@ defmodule AshStorage.AnalyzerObanTest do
           PgPost
           |> Ash.Changeset.for_create(
             :create_with_analyzed_document,
-            %{title: "not committed", file: Ash.Type.File.from_path(path)}, actor: actor)
+            %{title: "not committed", file: Ash.Type.File.from_path(path)},
+            actor: actor
+          )
           |> Ash.create()
         end)
 
