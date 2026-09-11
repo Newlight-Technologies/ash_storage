@@ -3,11 +3,14 @@ defmodule AshStorage.AnalyzerScratch do
 
   # Infrastructure only: callers own analyzer execution and result persistence.
   # Never expose uploaded bytes in a shared temporary directory.
-  def with_file(bytes, callback) when is_binary(bytes) and is_function(callback, 1) do
-    with {:ok, directory} <- create_directory(4) do
+  def with_file(bytes, callback, root \\ System.tmp_dir!())
+      when is_binary(bytes) and is_function(callback, 1) do
+    with {:ok, directory} <- create_directory(root, 4) do
       try do
         with :ok <- File.chmod(directory, 0o700) do
           write_and_run(Path.join(directory, "source"), bytes, callback)
+        else
+          {:error, _} -> scratch_failure()
         end
       after
         File.rmdir(directory)
@@ -23,27 +26,33 @@ defmodule AshStorage.AnalyzerScratch do
                :ok <- IO.binwrite(file, bytes),
                :ok <- File.close(file) do
             callback.(path)
+          else
+            {:error, _} -> scratch_failure()
           end
         after
           File.close(file)
           File.rm(path)
         end
 
-      {:error, _} = error ->
-        error
+      {:error, _} ->
+        scratch_failure()
     end
   end
 
-  defp create_directory(0), do: {:error, :analyzer_scratch_unavailable}
+  defp create_directory(_root, 0), do: scratch_failure()
 
-  defp create_directory(attempts) do
+  defp create_directory(root, attempts) do
     suffix = Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
-    directory = Path.join(System.tmp_dir!(), "ash-storage-analyzer-" <> suffix)
+    directory = Path.join(root, "ash-storage-analyzer-" <> suffix)
 
     case File.mkdir(directory) do
       :ok -> {:ok, directory}
-      {:error, :eexist} -> create_directory(attempts - 1)
-      {:error, _} = error -> error
+      {:error, :eexist} -> create_directory(root, attempts - 1)
+      {:error, _} -> scratch_failure()
     end
+  end
+
+  defp scratch_failure do
+    {:error, %AshStorage.Analyzer.Failure{code: :analyzer_scratch_unavailable, retryable?: true}}
   end
 end

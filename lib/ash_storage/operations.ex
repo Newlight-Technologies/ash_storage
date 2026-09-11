@@ -248,42 +248,61 @@ defmodule AshStorage.Operations do
 
         if analyzer_module.accept?(content_type) do
           with {:ok, data} <- download(blob, opts) do
-            AshStorage.AnalyzerScratch.with_file(data, fn path ->
-              keyword_opts =
-                Enum.map(analyzer_opts, fn {k, v} -> {String.to_existing_atom(k), v} end)
+            result =
+              AshStorage.AnalyzerScratch.with_file(data, fn path ->
+                keyword_opts =
+                  Enum.map(analyzer_opts, fn {k, v} -> {String.to_existing_atom(k), v} end)
 
-              {status, metadata_to_merge, failure} =
-                case analyzer_module.analyze(path, keyword_opts) do
-                  {:ok, result} ->
-                    {"complete", result, nil}
+                {status, metadata_to_merge, failure} =
+                  case analyzer_module.analyze(path, keyword_opts) do
+                    {:ok, result} ->
+                      {"complete", result, nil}
 
-                  {:error, reason} ->
-                    failure = AshStorage.Analyzer.Failure.to_map(reason)
-                    {analyzer_failure_status(failure, opts), %{}, failure}
+                    {:error, reason} ->
+                      failure = AshStorage.Analyzer.Failure.to_map(reason)
+                      {analyzer_failure_status(failure, opts), %{}, failure}
+                  end
+
+                with {:ok, blob} <-
+                       Ash.update(
+                         blob,
+                         %{
+                           analyzer_key: analyzer_key,
+                           status: status,
+                           failure: failure,
+                           metadata_to_merge: metadata_to_merge
+                         },
+                         Keyword.merge(context_opts, action: :complete_analysis)
+                       ) do
+                  if status == "complete" do
+                    maybe_apply_oban_write_attributes(
+                      analyzer_entry,
+                      metadata_to_merge,
+                      context_opts
+                    )
+                  end
+
+                  {:ok, blob}
                 end
+              end)
 
-              with {:ok, blob} <-
-                     Ash.update(
-                       blob,
-                       %{
-                         analyzer_key: analyzer_key,
-                         status: status,
-                         failure: failure,
-                         metadata_to_merge: metadata_to_merge
-                       },
-                       Keyword.merge(context_opts, action: :complete_analysis)
-                     ) do
-                if status == "complete" do
-                  maybe_apply_oban_write_attributes(
-                    analyzer_entry,
-                    metadata_to_merge,
-                    context_opts
-                  )
-                end
+            case result do
+              {:error, %AshStorage.Analyzer.Failure{} = failure} ->
+                failure = AshStorage.Analyzer.Failure.to_map(failure)
 
-                {:ok, blob}
-              end
-            end)
+                Ash.update(
+                  blob,
+                  %{
+                    analyzer_key: analyzer_key,
+                    status: analyzer_failure_status(failure, opts),
+                    failure: failure
+                  },
+                  Keyword.merge(context_opts, action: :complete_analysis)
+                )
+
+              result ->
+                result
+            end
           else
             {:error, _reason} ->
               Ash.update(

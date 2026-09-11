@@ -50,6 +50,13 @@ removed after the analyzer returns or raises. Existing caller-owned file paths
 are borrowed without changing permissions or deleting them; callers remain
 responsible for securing those paths. Analysis is not a pre-upload malware gate.
 
+Private scratch setup failures return the typed, retryable
+`analyzer_scratch_unavailable` failure. Background analysis records that failure
+through its normal completion action; eager attachment propagates the setup
+failure rather than proceeding without analysis. Normal callback return and
+exception cleanup is covered, but process termination can leave private scratch
+files behind; host-level cleanup remains an operational responsibility.
+
 ## Reading analyzer results
 
 Analyzer results are stored across two blob fields:

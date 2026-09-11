@@ -3,6 +3,24 @@ defmodule AshStorage.AnalyzerScratchTest do
 
   alias AshStorage.AnalyzerScratch
 
+  @tag :tmp_dir
+  test "unavailable scratch root fails safely without invoking analyzer", %{tmp_dir: root} do
+    missing = Path.join(root, "missing/parent")
+
+    assert {:error,
+            %AshStorage.Analyzer.Failure{
+              code: :analyzer_scratch_unavailable,
+              retryable?: true
+            }} =
+             AnalyzerScratch.with_file(
+               "private evidence",
+               fn _ -> flunk("must not analyze") end,
+               missing
+             )
+
+    assert File.ls!(root) == []
+  end
+
   test "source and directory are private and removed after success" do
     assert {:ok, path} =
              AnalyzerScratch.with_file("private evidence", fn path ->
