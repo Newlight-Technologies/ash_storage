@@ -31,7 +31,71 @@ defmodule AshStorage.AnalyzerObanTest do
     blob
   end
 
+  defp perform_upload_analysis(:viewer, job) do
+    assert_raise Ash.Error.Invalid, ~r/analyzer_retry_required/, fn ->
+      perform_job(PgBlob.RunPendingAnalyzersWorker, job.args, attempt: 1, max_attempts: 3)
+    end
+  end
+
+  defp perform_upload_analysis(:editor, job) do
+    assert {:ok, _} =
+             perform_job(PgBlob.RunPendingAnalyzersWorker, job.args, attempt: 1, max_attempts: 3)
+  end
+
+  defp assert_upload_actor_result(:viewer, blob, key, post) do
+    assert blob.pending_analyzers
+    assert blob.analyzers[key]["status"] == "pending"
+    assert blob.analyzers[key]["failure"]["code"] == "analyzer_result_write_failed"
+    refute Map.has_key?(blob.metadata, "extracted_title")
+    assert Ash.get!(PgPost, post.id).title == "unchanged"
+  end
+
+  defp assert_upload_actor_result(:editor, blob, key, post) do
+    refute blob.pending_analyzers
+    assert blob.analyzers[key]["status"] == "complete"
+    assert Ash.get!(PgPost, post.id).title == "extracted evidence"
+  end
+
   describe "run_analyzer/3 on Postgres" do
+    for upload_path <- [:attach, :file_argument], role <- [:viewer, :editor] do
+      @tag :capture_log
+      test "#{upload_path} preserves the #{role} uploader in the analyzer worker" do
+        actor = %{restricted?: true, role: unquote(role)}
+
+        post =
+          case unquote(upload_path) do
+            :attach ->
+              create_post!("unchanged")
+              |> Ash.Changeset.for_update(
+                :attach_analyzed_document,
+                %{io: "extracted evidence", filename: "source.txt", content_type: "text/plain"},
+                actor: actor
+              )
+              |> Ash.update!()
+
+            :file_argument ->
+              AshStorage.AnalyzerScratch.with_file("extracted evidence", fn path ->
+                PgPost
+                |> Ash.Changeset.for_create(
+                  :create_with_analyzed_document,
+                  %{title: "unchanged", file: Ash.Type.File.from_path(path)},
+                  actor: actor
+                )
+                |> Ash.create!()
+              end)
+          end
+
+        [job] = all_enqueued(worker: PgBlob.RunPendingAnalyzersWorker)
+        assert job.args["actor"] == %{"restricted" => true, "role" => to_string(actor.role)}
+
+        perform_upload_analysis(actor.role, job)
+
+        blob = Ash.get!(PgBlob, job.args["primary_key"]["id"])
+        key = to_string(AshStorage.Test.TitleAnalyzer)
+        assert_upload_actor_result(actor.role, blob, key, post)
+      end
+    end
+
     @tag :capture_log
     test "generated worker persists cleanup failure without success metadata or automatic retry" do
       analyzer = AshStorage.Test.CleanupFailureAnalyzer

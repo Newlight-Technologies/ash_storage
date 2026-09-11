@@ -22,6 +22,13 @@ defmodule AshStorage.Test.PgPost do
     end
 
     has_many_attached(:documents, dependent: :detach)
+
+    has_one_attached :analyzed_document do
+      analyzer(AshStorage.Test.TitleAnalyzer,
+        analyze: :oban,
+        write_attributes: [extracted_title: :title]
+      )
+    end
   end
 
   attributes do
@@ -41,6 +48,14 @@ defmodule AshStorage.Test.PgPost do
 
   actions do
     defaults [:read, :destroy, create: [:title], update: [:title]]
+
+    create :create_with_analyzed_document do
+      accept [:title]
+      argument :file, Ash.Type.File, allow_nil?: false
+
+      change {AshStorage.Changes.HandleFileArgument,
+              argument: :file, attachment: :analyzed_document}
+    end
 
     update :attach_cover_image_then_fail do
       require_atomic? false

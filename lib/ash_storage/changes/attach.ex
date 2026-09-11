@@ -66,7 +66,10 @@ defmodule AshStorage.Changes.Attach do
                  ),
                {:ok, blob} <- store_oban_variants(blob, attachment_def, resource) do
             if attach_context[:has_oban_analyzers?] do
-              AshOban.run_trigger(blob, :run_pending_analyzers, tenant: changeset.tenant)
+              AshOban.run_trigger(blob, :run_pending_analyzers,
+                tenant: changeset.tenant,
+                actor: context_opts[:actor]
+              )
             end
 
             if has_oban_variants?(attachment_def) do

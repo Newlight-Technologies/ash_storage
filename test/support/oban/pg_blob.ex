@@ -16,6 +16,7 @@ defmodule AshStorage.Test.PgBlob do
   oban do
     triggers do
       trigger :run_pending_analyzers do
+        actor_persister(AshStorage.Test.AnalyzerActorPersister)
         action :run_pending_analyzers
         on_error(:fail_pending_analyzers)
         on_error_fails_job?(true)
