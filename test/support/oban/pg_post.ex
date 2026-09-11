@@ -3,6 +3,7 @@ defmodule AshStorage.Test.PgPost do
   use Ash.Resource,
     domain: AshStorage.Test.PgDomain,
     data_layer: AshPostgres.DataLayer,
+    authorizers: [Ash.Policy.Authorizer],
     extensions: [AshStorage]
 
   postgres do
@@ -26,6 +27,16 @@ defmodule AshStorage.Test.PgPost do
   attributes do
     uuid_primary_key :id
     attribute :title, :string, allow_nil?: false, public?: true
+  end
+
+  policies do
+    policy always() do
+      authorize_if always()
+    end
+
+    policy [action(:update), actor_attribute_equals(:restricted?, true)] do
+      authorize_if actor_attribute_equals(:role, :editor)
+    end
   end
 
   actions do

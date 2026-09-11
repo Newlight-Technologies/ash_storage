@@ -32,6 +32,45 @@ defmodule AshStorage.AnalyzerObanTest do
   end
 
   describe "run_analyzer/3 on Postgres" do
+    test "parent result writes honor the supplied actor and recover with an authorized actor" do
+      key = to_string(AshStorage.Test.TitleAnalyzer)
+      parent = create_post!("unchanged")
+
+      blob =
+        attach_with_analyzers!(parent, "extracted evidence",
+          filename: "source.txt",
+          content_type: "text/plain",
+          analyzers_map: %{
+            key => %{
+              "status" => "pending",
+              "opts" => %{},
+              "write_attributes" => %{"extracted_title" => "title"},
+              "write_target" => %{"resource" => to_string(PgPost), "id" => parent.id}
+            }
+          }
+        )
+
+      assert {:ok, failed} =
+               Operations.run_analyzer(blob, AshStorage.Test.TitleAnalyzer,
+                 actor: %{restricted?: true, role: :viewer},
+                 authorize?: true
+               )
+
+      assert failed.analyzers[key]["status"] == "error"
+      assert failed.analyzers[key]["failure"]["code"] == "analyzer_result_write_failed"
+      assert Ash.get!(PgPost, parent.id).title == "unchanged"
+      refute Map.has_key?(failed.metadata, "extracted_title")
+
+      assert {:ok, recovered} =
+               Operations.run_analyzer(failed, AshStorage.Test.TitleAnalyzer,
+                 actor: %{restricted?: true, role: :editor},
+                 authorize?: true
+               )
+
+      assert recovered.analyzers[key]["status"] == "complete"
+      assert Ash.get!(PgPost, parent.id).title == "extracted evidence"
+    end
+
     test "parent write failure does not commit analyzer success and can recover" do
       key = to_string(AshStorage.Test.TitleAnalyzer)
       target_id = Ash.UUID.generate()
