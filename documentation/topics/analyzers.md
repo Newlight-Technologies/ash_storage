@@ -137,6 +137,13 @@ When `ImageDimensions` returns `%{"width" => 1920, "height" => 1080}`, the value
 
 For eager analyzers, this happens in a `before_action` hook via `force_change_attributes`. For oban analyzers, a separate update is performed when the background job completes.
 
+Background result persistence groups blob completion and the configured parent
+update in an Ash transaction. A returned lookup/update error is not ignored:
+the transaction rolls back and the blob records `analyzer_result_write_failed`
+for recovery. Scanning happens before this database transaction. Atomicity
+requires transactional resources in the same database; this is not a distributed
+transaction guarantee across storage services or independent databases.
+
 ## Background analysis with AshOban
 
 For expensive analysis (video processing, large file scanning), run analyzers in the background:

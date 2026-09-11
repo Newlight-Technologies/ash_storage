@@ -49,6 +49,14 @@ defmodule AshStorage.Test.FailingAnalyzer do
   end
 end
 
+defmodule AshStorage.Test.TitleAnalyzer do
+  @moduledoc false
+  @behaviour AshStorage.Analyzer
+
+  def accept?(_), do: true
+  def analyze(path, _opts), do: {:ok, %{"extracted_title" => File.read!(path)}}
+end
+
 defmodule AshStorage.Test.RaisingAnalyzer do
   @moduledoc false
   @behaviour AshStorage.Analyzer

@@ -263,26 +263,54 @@ defmodule AshStorage.Operations do
                       {analyzer_failure_status(failure, opts), %{}, failure}
                   end
 
-                with {:ok, blob} <-
-                       Ash.update(
-                         blob,
-                         %{
-                           analyzer_key: analyzer_key,
-                           status: status,
-                           failure: failure,
-                           metadata_to_merge: metadata_to_merge
-                         },
-                         Keyword.merge(context_opts, action: :complete_analysis)
-                       ) do
-                  if status == "complete" do
-                    maybe_apply_oban_write_attributes(
-                      analyzer_entry,
-                      metadata_to_merge,
-                      context_opts
-                    )
+                resources =
+                  case analyzer_entry["write_target"] do
+                    %{"resource" => resource} ->
+                      [blob.__struct__, String.to_existing_atom(resource)]
+
+                    _ ->
+                      [blob.__struct__]
                   end
 
-                  {:ok, blob}
+                result =
+                  Ash.transact(resources, fn ->
+                    with {:ok, updated} <-
+                           Ash.update(
+                             blob,
+                             %{
+                               analyzer_key: analyzer_key,
+                               status: status,
+                               failure: failure,
+                               metadata_to_merge: metadata_to_merge
+                             },
+                             Keyword.merge(context_opts, action: :complete_analysis)
+                           ),
+                         :ok <-
+                           maybe_apply_oban_write_attributes(
+                             analyzer_entry,
+                             metadata_to_merge,
+                             context_opts
+                           ) do
+                      updated
+                    end
+                  end)
+
+                case result do
+                  {:ok, updated} ->
+                    {:ok, updated}
+
+                  {:error, _reason} ->
+                    failure = %{"code" => "analyzer_result_write_failed", "retryable" => true}
+
+                    Ash.update(
+                      blob,
+                      %{
+                        analyzer_key: analyzer_key,
+                        status: analyzer_failure_status(failure, opts),
+                        failure: failure
+                      },
+                      Keyword.merge(context_opts, action: :complete_analysis)
+                    )
                 end
               end)
 
@@ -419,7 +447,7 @@ defmodule AshStorage.Operations do
       context_opts =
         context_opts
         |> Keyword.put(:tenant, tenant)
-        |> Keyword.take([:actor, :tenant, :authorize?, :tracer])
+        |> Keyword.take([:actor, :tenant, :authorize?, :tracer, :context])
 
       attrs =
         Enum.reduce(write_attributes, %{}, fn {result_key, attr_name}, acc ->
@@ -433,14 +461,22 @@ defmodule AshStorage.Operations do
         case Ash.get(resource, record_id, context_opts) do
           {:ok, record} ->
             record
-            |> Ash.Changeset.for_update(:update, %{})
+            |> Ash.Changeset.for_update(:update, %{}, context_opts)
             |> Ash.Changeset.force_change_attributes(attrs)
-            |> Ash.update(context_opts)
+            |> Ash.update()
+            |> case do
+              {:ok, _record} -> :ok
+              {:error, error} -> {:error, error}
+            end
 
-          _ ->
-            :ok
+          {:error, error} ->
+            {:error, error}
         end
+      else
+        :ok
       end
+    else
+      :ok
     end
   end
 

@@ -32,6 +32,42 @@ defmodule AshStorage.AnalyzerObanTest do
   end
 
   describe "run_analyzer/3 on Postgres" do
+    test "parent write failure does not commit analyzer success and can recover" do
+      key = to_string(AshStorage.Test.TitleAnalyzer)
+      target_id = Ash.UUID.generate()
+
+      blob =
+        attach_with_analyzers!(create_post!(), "evidence",
+          filename: "source.txt",
+          content_type: "text/plain",
+          analyzers_map: %{
+            key => %{
+              "status" => "pending",
+              "opts" => %{},
+              "write_attributes" => %{"extracted_title" => "title"},
+              "write_target" => %{"resource" => to_string(PgPost), "id" => target_id}
+            }
+          }
+        )
+
+      assert {:ok, failed} = Operations.run_analyzer(blob, AshStorage.Test.TitleAnalyzer)
+      assert failed.analyzers[key]["status"] == "error"
+      assert failed.analyzers[key]["failure"]["code"] == "analyzer_result_write_failed"
+      refute Map.has_key?(failed.metadata, "extracted_title")
+      persisted = Ash.get!(PgBlob, blob.id)
+      refute Map.has_key?(persisted.metadata, "extracted_title")
+
+      PgPost
+      |> Ash.Changeset.for_create(:create, %{title: "original"})
+      |> Ash.Changeset.force_change_attribute(:id, target_id)
+      |> Ash.create!()
+
+      assert {:ok, recovered} = Operations.run_analyzer(failed, AshStorage.Test.TitleAnalyzer)
+      assert recovered.analyzers[key]["status"] == "complete"
+      assert recovered.analyzers[key]["failure"] == nil
+      assert Ash.get!(PgPost, target_id).title == "evidence"
+    end
+
     test "missing source records failure and recovery analyzes the restored original" do
       post = create_post!()
       analyzer = AshStorage.Test.TestAnalyzer
@@ -294,7 +330,10 @@ defmodule AshStorage.AnalyzerObanTest do
                  catch_error(
                    perform_job(
                      AshStorage.Test.PgBlob.RunPendingAnalyzersWorker,
-                     job.args, attempt: attempt, max_attempts: job.max_attempts)
+                     job.args,
+                     attempt: attempt,
+                     max_attempts: job.max_attempts
+                   )
                  )
       end
 
