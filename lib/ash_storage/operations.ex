@@ -19,6 +19,24 @@ defmodule AshStorage.Operations do
   alias AshStorage.Service.Context
 
   @doc """
+  Run a synchronous outer Ash transaction that includes storage actions.
+
+  Successful inner uploads are removed if the outer transaction rolls back;
+  replacement/purge object deletion is deferred until commit. Options and normal
+  return values match `Ash.transact/3`, including `:return_notifications?`.
+
+  This must be the outer transaction, and every resource must participate in the
+  same transactional database/coordinator. Nested calls, already-open transactions
+  and nontransactional resources are rejected. Do not start asynchronous storage
+  tasks within the callback: transaction tracking is owned by the calling process.
+  This is not a distributed transaction or crash-durable object-store outbox.
+  Cleanup failures require reconciliation; a committed-cleanup error must not be
+  blindly retried as though the database transaction rolled back.
+  """
+  def transact(resources, callback, opts \\ []),
+    do: AshStorage.Transaction.run(resources, callback, opts)
+
+  @doc """
   Attach a file to a record.
 
   Calls the `:attach_<name>` action on the parent resource, which uploads the

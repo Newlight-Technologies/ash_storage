@@ -18,7 +18,10 @@ defmodule AshStorage.Changes.PurgeFilesAfterTransaction do
     keys_to_purge =
       changeset.context[@success_context_key] || record.__metadata__[@success_context_key] || []
 
-    case purge(keys_to_purge) do
+    failures =
+      if AshStorage.Transaction.defer(:commit, keys_to_purge), do: [], else: purge(keys_to_purge)
+
+    case failures do
       [] ->
         {:ok, record}
 
@@ -57,7 +60,10 @@ defmodule AshStorage.Changes.PurgeFilesAfterTransaction do
     result
   end
 
-  def cleanup_rollback(_rollback_ref, {:ok, _record} = result), do: result
+  def cleanup_rollback(rollback_ref, {:ok, _record} = result) do
+    AshStorage.Transaction.defer(:rollback, Process.get(rollback_ref, []))
+    result
+  end
 
   def purge_now(keys_to_purge), do: purge(keys_to_purge)
 

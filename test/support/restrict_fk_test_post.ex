@@ -4,6 +4,7 @@ defmodule AshStorage.Test.RestrictFkTestPost do
   use Ash.Resource,
     domain: AshStorage.Test.PgDomain,
     data_layer: AshPostgres.DataLayer,
+    notifiers: [AshStorage.Test.TransactionTestNotifier],
     extensions: [AshStorage]
 
   postgres do
