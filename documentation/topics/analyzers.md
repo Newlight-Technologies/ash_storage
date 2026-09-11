@@ -71,6 +71,30 @@ post.cover_image.blob.metadata
 
 If multiple analyzers return overlapping keys, later results overwrite earlier ones in the metadata map.
 
+### Failures and explicit retries
+
+An analyzer returning `{:error, reason}` records `"status" => "error"` and a
+`"failure"` map on its analyzer entry. Static atom reasons are retained as codes;
+arbitrary strings, exceptions, and other terms become `"analyzer_failed"` so
+document contents, scanner output, and local paths are not persisted as errors.
+For a known transient condition, return a typed failure:
+
+```elixir
+{:error, %AshStorage.Analyzer.Failure{code: :scanner_unavailable, retryable?: true}}
+```
+
+This records `%{"code" => "scanner_unavailable", "retryable" => true}`. The flag
+is evidence for the caller's recovery policy, not an automatic retry schedule.
+`run_pending_analyzers` only selects pending entries. An authorized caller can
+explicitly invoke `AshStorage.Operations.run_analyzer/3` again for an errored
+entry; success clears its failure and merges the new result metadata.
+
+The operation returning `{:ok, blob}` means the analysis outcome was persisted,
+not that the file passed analysis. Consumers must inspect the analyzer status
+and their analyzer's verdict. Neither an error nor a completed malware analysis
+alone proves a clean file. Applications must keep pre-upload malware admission
+separate from this post-upload lifecycle.
+
 ## Writing results to parent attributes
 
 Use `write_attributes` to map analyzer result keys to attributes on the parent record:

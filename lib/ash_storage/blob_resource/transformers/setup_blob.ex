@@ -146,12 +146,15 @@ defmodule AshStorage.BlobResource.Transformers.SetupBlob do
     {:ok, metadata_to_merge_arg} =
       Ash.Resource.Builder.build_action_argument(:metadata_to_merge, :map, default: %{})
 
+    {:ok, failure_arg} =
+      Ash.Resource.Builder.build_action_argument(:failure, :map)
+
     {:ok, complete_change} =
       Ash.Resource.Builder.build_action_change(AshStorage.BlobResource.Changes.CompleteAnalysis)
 
     Ash.Resource.Builder.add_action(dsl_state, :update, :complete_analysis,
       accept: [],
-      arguments: [analyzer_key_arg, status_arg, metadata_to_merge_arg],
+      arguments: [analyzer_key_arg, status_arg, metadata_to_merge_arg, failure_arg],
       changes: [complete_change]
     )
   end

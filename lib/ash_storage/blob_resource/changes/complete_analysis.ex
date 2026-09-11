@@ -23,7 +23,11 @@ defmodule AshStorage.BlobResource.Changes.CompleteAnalysis do
       current_analyzers = record.analyzers || %{}
       current_metadata = record.metadata || %{}
 
-      updated_analyzers = put_in(current_analyzers, [analyzer_key, "status"], status)
+      updated_analyzers =
+        current_analyzers
+        |> put_in([analyzer_key, "status"], status)
+        |> put_in([analyzer_key, "failure"], Ash.Changeset.get_argument(changeset, :failure))
+
       updated_metadata = Map.merge(current_metadata, metadata_to_merge)
 
       still_pending? =
@@ -60,7 +64,11 @@ defmodule AshStorage.BlobResource.Changes.CompleteAnalysis do
     current_analyzers = record.analyzers || %{}
     current_metadata = record.metadata || %{}
 
-    updated_analyzers = put_in(current_analyzers, [analyzer_key, "status"], status)
+    updated_analyzers =
+      current_analyzers
+      |> put_in([analyzer_key, "status"], status)
+      |> put_in([analyzer_key, "failure"], Ash.Changeset.get_argument(changeset, :failure))
+
     updated_metadata = Map.merge(current_metadata, metadata_to_merge)
 
     still_pending? =
@@ -85,16 +93,23 @@ defmodule AshStorage.BlobResource.Changes.CompleteAnalysis do
     status = Ash.Changeset.get_argument(changeset, :status)
     metadata_to_merge = Ash.Changeset.get_argument(changeset, :metadata_to_merge) || %{}
 
+    analysis_result = %{
+      "status" => status,
+      "failure" => Ash.Changeset.get_argument(changeset, :failure)
+    }
+
     atomics =
       %{
         analyzers:
           {:atomic,
            Ash.Expr.expr(
              fragment(
-               "jsonb_set(coalesce(?, '{}'), ?::text[], to_jsonb(?::text))",
+               "jsonb_set(coalesce(?, '{}'), ?::text[], coalesce(? -> ?::text, '{}') || ?::jsonb)",
                analyzers,
-               ^[analyzer_key, "status"],
-               ^status
+               ^[analyzer_key],
+               analyzers,
+               ^analyzer_key,
+               ^analysis_result
              )
            )}
       }

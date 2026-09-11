@@ -223,10 +223,10 @@ defmodule AshStorage.Changes.Attach do
                                                               {:ok, blob, acc_writes} ->
         analyzer_key = to_string(module)
 
-        {status, metadata_to_merge} =
+        {status, metadata_to_merge, failure} =
           case module.analyze(path, opts) do
-            {:ok, result} -> {"complete", result}
-            {:error, _reason} -> {"error", %{}}
+            {:ok, result} -> {"complete", result, nil}
+            {:error, reason} -> {"error", %{}, AshStorage.Analyzer.Failure.to_map(reason)}
           end
 
         new_writes =
@@ -246,6 +246,7 @@ defmodule AshStorage.Changes.Attach do
                %{
                  analyzer_key: analyzer_key,
                  status: status,
+                 failure: failure,
                  metadata_to_merge: metadata_to_merge
                },
                Keyword.merge(context_opts, action: :complete_analysis)

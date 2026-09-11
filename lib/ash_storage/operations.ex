@@ -241,7 +241,7 @@ defmodule AshStorage.Operations do
         context_opts =
           opts
           |> Keyword.put(:tenant, tenant)
-          |> Keyword.take([:actor, :tenant, :authorize?, :tracer])
+          |> Keyword.take([:actor, :tenant, :authorize?, :tracer, :context])
 
         analyzer_opts = analyzer_entry["opts"] || %{}
         content_type = blob.content_type || "application/octet-stream"
@@ -252,10 +252,10 @@ defmodule AshStorage.Operations do
               keyword_opts =
                 Enum.map(analyzer_opts, fn {k, v} -> {String.to_existing_atom(k), v} end)
 
-              {status, metadata_to_merge} =
+              {status, metadata_to_merge, failure} =
                 case analyzer_module.analyze(path, keyword_opts) do
-                  {:ok, result} -> {"complete", result}
-                  {:error, _reason} -> {"error", %{}}
+                  {:ok, result} -> {"complete", result, nil}
+                  {:error, reason} -> {"error", %{}, AshStorage.Analyzer.Failure.to_map(reason)}
                 end
 
               with {:ok, blob} <-
@@ -264,6 +264,7 @@ defmodule AshStorage.Operations do
                        %{
                          analyzer_key: analyzer_key,
                          status: status,
+                         failure: failure,
                          metadata_to_merge: metadata_to_merge
                        },
                        Keyword.merge(context_opts, action: :complete_analysis)

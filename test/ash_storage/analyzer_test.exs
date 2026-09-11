@@ -67,6 +67,10 @@ defmodule AshStorage.AnalyzerTest do
         )
 
       assert blob.analyzers[to_string(AshStorage.Test.FailingAnalyzer)]["status"] == "error"
+
+      assert blob.analyzers[to_string(AshStorage.Test.FailingAnalyzer)]["failure"] ==
+               %{"code" => "analysis_failed", "retryable" => false}
+
       # TestAnalyzer should still run successfully after the failure
       assert blob.analyzers[to_string(AshStorage.Test.TestAnalyzer)]["status"] == "complete"
       assert blob.metadata["line_count"] == 1

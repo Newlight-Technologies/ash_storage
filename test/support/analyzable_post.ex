@@ -49,6 +49,27 @@ defmodule AshStorage.Test.FailingAnalyzer do
   end
 end
 
+defmodule AshStorage.Test.RecoveringAnalyzer do
+  @moduledoc false
+  @behaviour AshStorage.Analyzer
+
+  def accept?(_), do: true
+
+  def analyze(path, opts) do
+    key = {__MODULE__, Keyword.fetch!(opts, :test_key)}
+
+    case Process.get(key, false) do
+      false ->
+        Process.put(key, true)
+        {:error, %AshStorage.Analyzer.Failure{code: :scanner_unavailable, retryable?: true}}
+
+      true ->
+        Process.delete(key)
+        {:ok, %{"recovered_byte_count" => byte_size(File.read!(path))}}
+    end
+  end
+end
+
 defmodule AshStorage.Test.AnalyzablePost do
   @moduledoc false
   use Ash.Resource,

@@ -9,7 +9,9 @@ defmodule AshStorage.BlobResource.Changes.RunPendingAnalyzers do
   use Ash.Resource.Change
 
   @impl true
-  def change(changeset, _opts, _context) do
+  def change(changeset, _opts, context) do
+    context_opts = Ash.Context.to_opts(context)
+
     Ash.Changeset.after_action(changeset, fn changeset, blob ->
       analyzers = blob.analyzers || %{}
 
@@ -22,7 +24,11 @@ defmodule AshStorage.BlobResource.Changes.RunPendingAnalyzers do
         # sobelow_skip ["DOS.BinToAtom"]
         module = String.to_existing_atom(analyzer_mod)
 
-        case AshStorage.Operations.run_analyzer(blob, module, tenant: changeset.tenant) do
+        case AshStorage.Operations.run_analyzer(
+               blob,
+               module,
+               Keyword.put(context_opts, :tenant, changeset.tenant)
+             ) do
           {:ok, blob} -> {:cont, {:ok, blob}}
           {:error, error} -> {:halt, {:error, error}}
         end

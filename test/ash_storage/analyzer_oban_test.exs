@@ -32,6 +32,39 @@ defmodule AshStorage.AnalyzerObanTest do
   end
 
   describe "run_analyzer/3 on Postgres" do
+    test "explicit retry clears previous failure only after a successful analysis" do
+      post = create_post!()
+      analyzer_key = to_string(AshStorage.Test.RecoveringAnalyzer)
+
+      blob =
+        attach_with_analyzers!(post, "evidence",
+          filename: "source.txt",
+          content_type: "text/plain",
+          analyzers_map: %{
+            analyzer_key => %{
+              "status" => "pending",
+              "opts" => %{"test_key" => Ash.UUID.generate()}
+            }
+          }
+        )
+
+      assert {:ok, failed} = Operations.run_analyzer(blob, AshStorage.Test.RecoveringAnalyzer)
+      assert failed.analyzers[analyzer_key]["status"] == "error"
+
+      assert failed.analyzers[analyzer_key]["failure"] ==
+               %{"code" => "scanner_unavailable", "retryable" => true}
+
+      refute Map.has_key?(failed.metadata, "recovered_byte_count")
+
+      assert {:ok, recovered} =
+               Operations.run_analyzer(failed, AshStorage.Test.RecoveringAnalyzer)
+
+      persisted = Ash.get!(PgBlob, recovered.id)
+      assert persisted.analyzers[analyzer_key]["status"] == "complete"
+      assert persisted.analyzers[analyzer_key]["failure"] == nil
+      assert persisted.metadata["recovered_byte_count"] == 8
+    end
+
     test "atomically completes analysis and merges metadata" do
       post = create_post!()
 
@@ -78,6 +111,9 @@ defmodule AshStorage.AnalyzerObanTest do
 
       assert updated_blob.analyzers[to_string(AshStorage.Test.FailingAnalyzer)]["status"] ==
                "error"
+
+      assert updated_blob.analyzers[to_string(AshStorage.Test.FailingAnalyzer)]["failure"] ==
+               %{"code" => "analysis_failed", "retryable" => false}
     end
 
     test "marks analyzer as skipped when content type not accepted" do
