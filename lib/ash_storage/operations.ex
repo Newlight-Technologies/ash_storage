@@ -248,15 +248,7 @@ defmodule AshStorage.Operations do
 
         if analyzer_module.accept?(content_type) do
           with {:ok, data} <- download(blob, opts) do
-            path =
-              Path.join(
-                System.tmp_dir!(),
-                "ash_storage_analyze_#{AshStorage.generate_key()}"
-              )
-
-            File.write!(path, data)
-
-            try do
+            AshStorage.AnalyzerScratch.with_file(data, fn path ->
               keyword_opts =
                 Enum.map(analyzer_opts, fn {k, v} -> {String.to_existing_atom(k), v} end)
 
@@ -286,9 +278,7 @@ defmodule AshStorage.Operations do
 
                 {:ok, blob}
               end
-            after
-              File.rm(path)
-            end
+            end)
           end
         else
           Ash.update(

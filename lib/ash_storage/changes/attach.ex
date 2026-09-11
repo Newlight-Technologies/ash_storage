@@ -217,9 +217,7 @@ defmodule AshStorage.Changes.Attach do
   defp run_eager_analyzers(blob, [], _io, _context_opts), do: {:ok, blob, %{}}
 
   defp run_eager_analyzers(blob, eager_analyzers, io, context_opts) do
-    {:ok, path} = resolve_analyzer_path(io)
-
-    try do
+    with_analyzer_path(io, fn path ->
       Enum.reduce_while(eager_analyzers, {:ok, blob, %{}}, fn {module, _analyze, opts,
                                                                write_attributes},
                                                               {:ok, blob, acc_writes} ->
@@ -256,9 +254,7 @@ defmodule AshStorage.Changes.Attach do
           {:error, error} -> {:halt, {:error, error}}
         end
       end)
-    after
-      maybe_cleanup_tempfile(io, path)
-    end
+    end)
   end
 
   defp maybe_put_tenant(map, nil), do: map
@@ -387,48 +383,32 @@ defmodule AshStorage.Changes.Attach do
 
   # -- Analyzer IO helpers --
 
-  defp resolve_analyzer_path(%Ash.Type.File{} = file) do
+  defp with_analyzer_path(%Ash.Type.File{} = file, callback) do
     case Ash.Type.File.path(file) do
-      {:ok, path} -> {:ok, path}
-      _ -> write_tempfile(file)
+      {:ok, path} -> callback.(path)
+      _ -> with_streamed_analyzer_file(file, callback)
     end
   end
 
-  defp resolve_analyzer_path(%File.Stream{path: path}), do: {:ok, path}
+  defp with_analyzer_path(%File.Stream{path: path}, callback), do: callback.(path)
 
-  defp resolve_analyzer_path(data) when is_binary(data) or is_list(data) do
-    write_tempfile(data)
+  defp with_analyzer_path(data, callback) when is_binary(data) or is_list(data) do
+    AshStorage.AnalyzerScratch.with_file(IO.iodata_to_binary(data), callback)
   end
 
-  defp write_tempfile(%Ash.Type.File{} = file) do
-    {:ok, device} = Ash.Type.File.open(file, [:read, :binary])
-    data = IO.binread(device, :eof)
-    File.close(device)
-    write_tempfile(data)
-  end
-
-  # sobelow_skip ["Traversal.FileModule"]
-  defp write_tempfile(data) when is_binary(data) do
-    path = Path.join(System.tmp_dir!(), "ash_storage_analyze_#{AshStorage.generate_key()}")
-    File.write!(path, data)
-    {:ok, path}
-  end
-
-  defp write_tempfile(data) when is_list(data) do
-    write_tempfile(IO.iodata_to_binary(data))
-  end
-
-  # sobelow_skip ["Traversal.FileModule"]
-  defp maybe_cleanup_tempfile(%Ash.Type.File{} = file, path) do
-    case Ash.Type.File.path(file) do
-      {:ok, ^path} -> :ok
-      _ -> File.rm(path)
+  defp with_streamed_analyzer_file(file, callback) do
+    with {:ok, device} <- Ash.Type.File.open(file, [:read, :binary]) do
+      try do
+        case IO.binread(device, :eof) do
+          data when is_binary(data) -> AshStorage.AnalyzerScratch.with_file(data, callback)
+          :eof -> AshStorage.AnalyzerScratch.with_file("", callback)
+          {:error, _} = error -> error
+        end
+      after
+        File.close(device)
+      end
     end
   end
-
-  defp maybe_cleanup_tempfile(%File.Stream{}, _path), do: :ok
-  # sobelow_skip ["Traversal.FileModule"]
-  defp maybe_cleanup_tempfile(_data, path), do: File.rm(path)
 
   # -- Attachment helpers --
 

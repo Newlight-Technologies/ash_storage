@@ -43,6 +43,13 @@ The `{Module, opts}` tuple form passes `opts` as the second argument to `analyze
 
 By default, analyzers run eagerly — synchronously during the attach operation, before the response is returned. The file data is still in memory from the upload, so no download round-trip is needed.
 
+When AshStorage creates an analyzer source file (for uploaded bytes, streamed
+file values without a path, or background downloads), it uses a private `0700`
+temporary directory and a `0600` file. Its owned source file and directory are
+removed after the analyzer returns or raises. Existing caller-owned file paths
+are borrowed without changing permissions or deleting them; callers remain
+responsible for securing those paths. Analysis is not a pre-upload malware gate.
+
 ## Reading analyzer results
 
 Analyzer results are stored across two blob fields:
