@@ -32,6 +32,48 @@ defmodule AshStorage.AnalyzerObanTest do
   end
 
   describe "run_analyzer/3 on Postgres" do
+    @tag :capture_log
+    test "generated worker persists cleanup failure without success metadata or automatic retry" do
+      analyzer = AshStorage.Test.CleanupFailureAnalyzer
+      key = to_string(analyzer)
+      test_key = Ash.UUID.generate()
+
+      blob =
+        attach_with_analyzers!(create_post!(), "private evidence",
+          filename: "source.txt",
+          content_type: "text/plain",
+          analyzers_map: %{
+            key => %{"status" => "pending", "opts" => %{"test_key" => test_key}}
+          }
+        )
+
+      blob = Ash.update!(blob, %{pending_analyzers: true}, action: :update_metadata)
+      job = AshOban.run_trigger(blob, :run_pending_analyzers)
+
+      try do
+        assert {:ok, _} =
+                 perform_job(AshStorage.Test.PgBlob.RunPendingAnalyzersWorker, job.args,
+                   attempt: 1,
+                   max_attempts: job.max_attempts
+                 )
+
+        failed = Ash.get!(PgBlob, blob.id)
+        refute failed.pending_analyzers
+        assert failed.analyzers[key]["status"] == "error"
+
+        assert failed.analyzers[key]["failure"] ==
+                 %{"code" => "analyzer_scratch_cleanup_failed", "retryable" => false}
+
+        refute Map.has_key?(failed.metadata, "should_not_persist")
+        assert File.exists?(Process.get({analyzer, test_key}))
+      after
+        if extra = Process.delete({analyzer, test_key}) do
+          File.rm!(extra)
+          File.rmdir!(Path.dirname(extra))
+        end
+      end
+    end
+
     test "parent result writes honor the supplied actor and recover with an authorized actor" do
       key = to_string(AshStorage.Test.TitleAnalyzer)
       parent = create_post!("unchanged")
