@@ -196,6 +196,7 @@ defmodule AshStorage.BlobResource.Transformers.SetupBlob do
 
     Ash.Resource.Builder.add_action(dsl_state, :update, :run_pending_analyzers,
       accept: [],
+      transaction?: false,
       require_atomic?: false,
       changes: [change]
     )

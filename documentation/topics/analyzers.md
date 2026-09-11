@@ -84,14 +84,23 @@ For a known transient condition, return a typed failure:
 ```
 
 This records `%{"code" => "scanner_unavailable", "retryable" => true}`. The flag
-is evidence for the caller's recovery policy, not an automatic retry schedule.
-`run_pending_analyzers` only selects pending entries. An authorized caller can
+is evidence for the caller's recovery policy. Outside an AshOban worker,
+`run_pending_analyzers` records failures without scheduling retries. An authorized caller can
 explicitly invoke `AshStorage.Operations.run_analyzer/3` again for an errored
 entry; success clears its failure and merges the new result metadata.
 Returned storage download errors likewise persist `analyzer_download_failed`
 with retryability enabled, without copying storage error details. Recovery still
 requires the original object to be available and pass the service's checksum
 verification before analysis can succeed.
+
+When run by an AshOban trigger, transient failures remain pending while the
+job has attempts remaining, and the action fails to request Oban's normal
+retry/backoff. At the final attempt they become errored and clear scheduler
+eligibility. Configure a finite `max_attempts` on the trigger. Successful and
+terminally failed analyzers are not rerun on the next attempt. The action is
+non-transactional and performs analysis after its action transaction so a job
+error does not roll back already-recorded failure evidence. Do not wrap it in
+an outer application transaction.
 
 The operation returning `{:ok, blob}` means the analysis outcome was persisted,
 not that the file passed analysis. Consumers must inspect the analyzer status

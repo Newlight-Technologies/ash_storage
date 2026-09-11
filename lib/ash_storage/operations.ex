@@ -254,8 +254,12 @@ defmodule AshStorage.Operations do
 
               {status, metadata_to_merge, failure} =
                 case analyzer_module.analyze(path, keyword_opts) do
-                  {:ok, result} -> {"complete", result, nil}
-                  {:error, reason} -> {"error", %{}, AshStorage.Analyzer.Failure.to_map(reason)}
+                  {:ok, result} ->
+                    {"complete", result, nil}
+
+                  {:error, reason} ->
+                    failure = AshStorage.Analyzer.Failure.to_map(reason)
+                    {analyzer_failure_status(failure, opts), %{}, failure}
                 end
 
               with {:ok, blob} <-
@@ -286,7 +290,7 @@ defmodule AshStorage.Operations do
                 blob,
                 %{
                   analyzer_key: analyzer_key,
-                  status: "error",
+                  status: analyzer_failure_status(%{"retryable" => true}, opts),
                   failure:
                     AshStorage.Analyzer.Failure.to_map(%AshStorage.Analyzer.Failure{
                       code: :analyzer_download_failed,
@@ -309,6 +313,12 @@ defmodule AshStorage.Operations do
         {:error, :analyzer_not_configured}
     end
   end
+
+  defp analyzer_failure_status(%{"retryable" => true}, opts) do
+    if Keyword.get(opts, :analyzer_retry?, false), do: "pending", else: "error"
+  end
+
+  defp analyzer_failure_status(_failure, _opts), do: "error"
 
   @doc """
   Attach multiple files to multiple records in bulk.

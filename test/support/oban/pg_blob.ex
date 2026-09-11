@@ -15,6 +15,16 @@ defmodule AshStorage.Test.PgBlob do
 
   oban do
     triggers do
+      trigger :run_pending_analyzers do
+        action :run_pending_analyzers
+        read_action :read
+        where expr(pending_analyzers == true)
+        scheduler_cron("* * * * *")
+        max_attempts(3)
+        scheduler_module_name(AshStorage.Test.PgBlob.RunPendingAnalyzersScheduler)
+        worker_module_name(AshStorage.Test.PgBlob.RunPendingAnalyzersWorker)
+      end
+
       trigger :purge_blob do
         action :purge_blob
         read_action :read

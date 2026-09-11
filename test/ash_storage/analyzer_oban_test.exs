@@ -271,6 +271,67 @@ defmodule AshStorage.AnalyzerObanTest do
   end
 
   describe "run_pending_analyzers action" do
+    @tag :capture_log
+    test "generated worker retries a transient failure and preserves evidence between attempts" do
+      key = to_string(AshStorage.Test.RecoveringAnalyzer)
+
+      blob =
+        attach_with_analyzers!(create_post!(), "evidence",
+          filename: "source.txt",
+          content_type: "text/plain",
+          analyzers_map: %{
+            key => %{"status" => "pending", "opts" => %{"test_key" => Ash.UUID.generate()}}
+          }
+        )
+
+      blob = Ash.update!(blob, %{pending_analyzers: true}, action: :update_metadata)
+      job = AshOban.run_trigger(blob, :run_pending_analyzers)
+      worker = AshStorage.Test.PgBlob.RunPendingAnalyzersWorker
+
+      assert_raise Ash.Error.Invalid, ~r/analyzer_retry_required/, fn ->
+        perform_job(worker, job.args, attempt: 1, max_attempts: job.max_attempts)
+      end
+
+      failed = Ash.get!(PgBlob, blob.id)
+      assert failed.pending_analyzers
+      assert failed.analyzers[key]["status"] == "pending"
+      assert failed.analyzers[key]["failure"]["code"] == "scanner_unavailable"
+
+      assert {:ok, _} = perform_job(worker, job.args, attempt: 2, max_attempts: job.max_attempts)
+      recovered = Ash.get!(PgBlob, blob.id)
+      refute recovered.pending_analyzers
+      assert recovered.analyzers[key]["status"] == "complete"
+      assert recovered.analyzers[key]["failure"] == nil
+    end
+
+    @tag :capture_log
+    test "generated worker exhausts transient download failures without leaving scheduler eligibility" do
+      key = to_string(AshStorage.Test.TestAnalyzer)
+
+      blob =
+        attach_with_analyzers!(create_post!(), "evidence",
+          filename: "source.txt",
+          content_type: "text/plain",
+          analyzers_map: %{key => %{"status" => "pending", "opts" => %{}}}
+        )
+
+      blob = Ash.update!(blob, %{pending_analyzers: true}, action: :update_metadata)
+      :ok = AshStorage.Service.Test.delete(blob.key, AshStorage.Service.Context.new([]))
+      job = AshOban.run_trigger(blob, :run_pending_analyzers)
+      worker = AshStorage.Test.PgBlob.RunPendingAnalyzersWorker
+
+      for attempt <- 1..job.max_attempts do
+        assert_raise Ash.Error.Invalid, ~r/analyzer_retry_required/, fn ->
+          perform_job(worker, job.args, attempt: attempt, max_attempts: job.max_attempts)
+        end
+      end
+
+      failed = Ash.get!(PgBlob, blob.id)
+      refute failed.pending_analyzers
+      assert failed.analyzers[key]["status"] == "error"
+      assert failed.analyzers[key]["failure"]["code"] == "analyzer_download_failed"
+    end
+
     test "runs all pending analyzers for a blob" do
       post = create_post!()
 
