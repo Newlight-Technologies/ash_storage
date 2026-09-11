@@ -116,6 +116,11 @@ defmodule AshStorage.Test.AnalyzablePost do
       analyzer(AshStorage.Test.TestAnalyzer)
     end
 
+    has_one_attached :private_file do
+      analyzer(AshStorage.Test.PrivateSourceAnalyzer)
+      analyzer(AshStorage.Test.FailingAnalyzer)
+    end
+
     has_one_attached :analyzed_doc do
       analyzer(AshStorage.Test.TestAnalyzer, write_attributes: [line_count: :cached_line_count])
     end
@@ -136,6 +141,12 @@ defmodule AshStorage.Test.AnalyzablePost do
 
       change {AshStorage.Changes.HandleFileArgument,
               argument: :document_file, attachment: :document}
+    end
+
+    create :create_with_private_file do
+      accept [:title]
+      argument :file, Ash.Type.File, allow_nil?: false
+      change {AshStorage.Changes.HandleFileArgument, argument: :file, attachment: :private_file}
     end
   end
 end

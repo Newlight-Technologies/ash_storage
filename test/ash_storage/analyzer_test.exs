@@ -15,6 +15,32 @@ defmodule AshStorage.AnalyzerTest do
   end
 
   describe "eager analyzers" do
+    test "file-argument IO analyzes exact uploaded bytes in private scratch and retains failures" do
+      bytes = "private source evidence"
+      {:ok, device} = StringIO.open(bytes)
+
+      post =
+        AshStorage.Test.AnalyzablePost
+        |> Ash.Changeset.for_create(
+          :create_with_private_file,
+          %{title: "private", file: Ash.Type.File.from_io(device)}
+        )
+        |> Ash.create!()
+        |> Ash.load!(private_file: :blob)
+
+      blob = post.private_file.blob
+      assert {:ok, ^bytes} = AshStorage.Service.Test.download(blob.key, [])
+      assert blob.metadata["source_sha256"] == Base.encode16(:crypto.hash(:sha256, bytes))
+      assert blob.metadata["source_mode"] == 0o600
+      assert blob.metadata["directory_mode"] == 0o700
+      path = Process.delete(AshStorage.Test.PrivateSourceAnalyzer)
+      refute File.exists?(path)
+      refute File.exists?(Path.dirname(path))
+
+      assert blob.analyzers[to_string(AshStorage.Test.FailingAnalyzer)]["failure"] ==
+               %{"code" => "analysis_failed", "retryable" => false}
+    end
+
     test "runs analyzer and merges metadata into blob" do
       post = create_post!()
 

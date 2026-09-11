@@ -129,10 +129,10 @@ defmodule AshStorage.Changes.HandleFileArgument do
              filename: filename,
              content_type: content_type
            ) do
-        {:ok, blob, upload_ctx} ->
+        {:ok, blob, upload_ctx, bytes} ->
           uploaded_file = {service_mod, upload_ctx, blob.key}
 
-          case run_analyzers(blob, attachment_def, changeset.data, file, context_opts) do
+          case run_analyzers(blob, attachment_def, changeset.data, bytes, context_opts) do
             {:ok, blob, attrs_to_write} ->
               {:ok, attrs_to_write,
                %{
@@ -292,18 +292,16 @@ defmodule AshStorage.Changes.HandleFileArgument do
   defp run_eager_analyzers(blob, [], _io, _context_opts), do: {:ok, blob, %{}}
 
   defp run_eager_analyzers(blob, eager_analyzers, io, context_opts) do
-    {:ok, path} = resolve_analyzer_path(io)
-
-    try do
+    AshStorage.AnalyzerScratch.with_file(read_io(io), fn path ->
       Enum.reduce_while(eager_analyzers, {:ok, blob, %{}}, fn {module, _analyze, opts,
                                                                write_attributes},
                                                               {:ok, blob, acc_writes} ->
         analyzer_key = to_string(module)
 
-        {status, metadata_to_merge} =
+        {status, metadata_to_merge, failure} =
           case module.analyze(path, opts) do
-            {:ok, result} -> {"complete", result}
-            {:error, _reason} -> {"error", %{}}
+            {:ok, result} -> {"complete", result, nil}
+            {:error, reason} -> {"error", %{}, AshStorage.Analyzer.Failure.to_map(reason)}
           end
 
         new_writes =
@@ -323,6 +321,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
                %{
                  analyzer_key: analyzer_key,
                  status: status,
+                 failure: failure,
                  metadata_to_merge: metadata_to_merge
                },
                Keyword.merge(context_opts, action: :complete_analysis)
@@ -331,9 +330,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
           {:error, error} -> {:halt, {:error, error}}
         end
       end)
-    after
-      maybe_cleanup_tempfile(io, path)
-    end
+    end)
   end
 
   defp maybe_put_tenant(map, nil), do: map
@@ -404,7 +401,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
       uploaded_file = {service_mod, ctx, key}
 
       case Ash.create(blob_resource, blob_attrs, Keyword.merge(context_opts, action: :create)) do
-        {:ok, blob} -> {:ok, blob, ctx}
+        {:ok, blob} -> {:ok, blob, ctx, data}
         {:error, error} -> {:error, error, uploaded_file}
       end
     end
@@ -437,47 +434,6 @@ defmodule AshStorage.Changes.HandleFileArgument do
 
   defp read_io(data) when is_binary(data), do: data
   defp read_io(data) when is_list(data), do: IO.iodata_to_binary(data)
-
-  defp resolve_analyzer_path(%Ash.Type.File{} = file) do
-    case Ash.Type.File.path(file) do
-      {:ok, path} -> {:ok, path}
-      _ -> write_tempfile(file)
-    end
-  end
-
-  defp resolve_analyzer_path(%File.Stream{path: path}), do: {:ok, path}
-
-  defp resolve_analyzer_path(data) when is_binary(data) or is_list(data) do
-    write_tempfile(data)
-  end
-
-  defp write_tempfile(%Ash.Type.File{} = file) do
-    {:ok, device} = Ash.Type.File.open(file, [:read, :binary])
-    data = IO.binread(device, :eof)
-    File.close(device)
-    write_tempfile(data)
-  end
-
-  # sobelow_skip ["Traversal.FileModule"]
-  defp write_tempfile(data) when is_binary(data) do
-    path = Path.join(System.tmp_dir!(), "ash_storage_analyze_#{AshStorage.generate_key()}")
-    File.write!(path, data)
-    {:ok, path}
-  end
-
-  defp write_tempfile(data) when is_list(data), do: write_tempfile(IO.iodata_to_binary(data))
-
-  # sobelow_skip ["Traversal.FileModule"]
-  defp maybe_cleanup_tempfile(%Ash.Type.File{} = file, path) do
-    case Ash.Type.File.path(file) do
-      {:ok, ^path} -> :ok
-      _ -> File.rm(path)
-    end
-  end
-
-  defp maybe_cleanup_tempfile(%File.Stream{}, _path), do: :ok
-  # sobelow_skip ["Traversal.FileModule"]
-  defp maybe_cleanup_tempfile(_data, path), do: File.rm(path)
 
   # sobelow_skip ["DOS.BinToAtom"]
   defp maybe_replace_existing(record, %{type: :one} = attachment_def, context_opts) do
