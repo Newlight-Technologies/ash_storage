@@ -280,6 +280,22 @@ defmodule AshStorage.Operations do
                 {:ok, blob}
               end
             end)
+          else
+            {:error, _reason} ->
+              Ash.update(
+                blob,
+                %{
+                  analyzer_key: analyzer_key,
+                  status: "error",
+                  failure:
+                    AshStorage.Analyzer.Failure.to_map(%AshStorage.Analyzer.Failure{
+                      code: :analyzer_download_failed,
+                      retryable?: true
+                    }),
+                  metadata_to_merge: %{}
+                },
+                Keyword.merge(context_opts, action: :complete_analysis)
+              )
           end
         else
           Ash.update(

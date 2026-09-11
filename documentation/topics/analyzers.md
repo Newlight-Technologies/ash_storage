@@ -88,6 +88,10 @@ is evidence for the caller's recovery policy, not an automatic retry schedule.
 `run_pending_analyzers` only selects pending entries. An authorized caller can
 explicitly invoke `AshStorage.Operations.run_analyzer/3` again for an errored
 entry; success clears its failure and merges the new result metadata.
+Returned storage download errors likewise persist `analyzer_download_failed`
+with retryability enabled, without copying storage error details. Recovery still
+requires the original object to be available and pass the service's checksum
+verification before analysis can succeed.
 
 The operation returning `{:ok, blob}` means the analysis outcome was persisted,
 not that the file passed analysis. Consumers must inspect the analyzer status

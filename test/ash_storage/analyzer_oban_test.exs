@@ -32,6 +32,38 @@ defmodule AshStorage.AnalyzerObanTest do
   end
 
   describe "run_analyzer/3 on Postgres" do
+    test "missing source records failure and recovery analyzes the restored original" do
+      post = create_post!()
+      analyzer = AshStorage.Test.TestAnalyzer
+      key = to_string(analyzer)
+
+      blob =
+        attach_with_analyzers!(post, "original evidence",
+          filename: "source.txt",
+          content_type: "text/plain",
+          analyzers_map: %{key => %{"status" => "pending", "opts" => %{}}}
+        )
+
+      service_context = AshStorage.Service.Context.new([])
+      :ok = AshStorage.Service.Test.delete(blob.key, service_context)
+
+      assert {:ok, failed} = Operations.run_analyzer(blob, analyzer)
+      persisted = Ash.get!(PgBlob, blob.id)
+      assert persisted.analyzers[key]["status"] == "error"
+
+      assert persisted.analyzers[key]["failure"] ==
+               %{"code" => "analyzer_download_failed", "retryable" => true}
+
+      refute Map.has_key?(persisted.metadata, "line_count")
+
+      :ok = AshStorage.Service.Test.upload(blob.key, "original evidence", service_context)
+      assert {:ok, recovered} = Operations.run_analyzer(failed, analyzer)
+      assert recovered.id == blob.id
+      assert recovered.analyzers[key]["status"] == "complete"
+      assert recovered.analyzers[key]["failure"] == nil
+      assert recovered.metadata["line_count"] == 1
+    end
+
     test "explicit retry clears previous failure only after a successful analysis" do
       post = create_post!()
       analyzer_key = to_string(AshStorage.Test.RecoveringAnalyzer)
