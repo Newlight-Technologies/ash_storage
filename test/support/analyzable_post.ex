@@ -49,6 +49,14 @@ defmodule AshStorage.Test.FailingAnalyzer do
   end
 end
 
+defmodule AshStorage.Test.RaisingAnalyzer do
+  @moduledoc false
+  @behaviour AshStorage.Analyzer
+
+  def accept?(_), do: true
+  def analyze(_path, _opts), do: raise("private scanner diagnostics")
+end
+
 defmodule AshStorage.Test.RecoveringAnalyzer do
   @moduledoc false
   @behaviour AshStorage.Analyzer

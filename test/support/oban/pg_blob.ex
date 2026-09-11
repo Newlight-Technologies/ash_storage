@@ -17,6 +17,8 @@ defmodule AshStorage.Test.PgBlob do
     triggers do
       trigger :run_pending_analyzers do
         action :run_pending_analyzers
+        on_error(:fail_pending_analyzers)
+        on_error_fails_job?(true)
         read_action :read
         where expr(pending_analyzers == true)
         scheduler_cron("* * * * *")

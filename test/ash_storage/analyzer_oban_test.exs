@@ -272,6 +272,44 @@ defmodule AshStorage.AnalyzerObanTest do
 
   describe "run_pending_analyzers action" do
     @tag :capture_log
+    test "exhaustion action records analyzer exceptions without leaking diagnostics" do
+      key = to_string(AshStorage.Test.RaisingAnalyzer)
+      completed_key = to_string(AshStorage.Test.TestAnalyzer)
+
+      blob =
+        attach_with_analyzers!(create_post!(), "evidence",
+          filename: "source.txt",
+          content_type: "text/plain",
+          analyzers_map: %{
+            key => %{"status" => "pending", "opts" => %{}},
+            completed_key => %{"status" => "complete", "opts" => %{}}
+          }
+        )
+
+      blob = Ash.update!(blob, %{pending_analyzers: true}, action: :update_metadata)
+      job = AshOban.run_trigger(blob, :run_pending_analyzers)
+
+      for attempt <- 1..job.max_attempts do
+        assert %{} =
+                 catch_error(
+                   perform_job(
+                     AshStorage.Test.PgBlob.RunPendingAnalyzersWorker,
+                     job.args, attempt: attempt, max_attempts: job.max_attempts)
+                 )
+      end
+
+      failed = Ash.get!(PgBlob, blob.id)
+      refute failed.pending_analyzers
+      assert failed.analyzers[key]["status"] == "error"
+
+      assert failed.analyzers[key]["failure"] ==
+               %{"code" => "analyzer_job_exhausted", "retryable" => false, "exhausted" => true}
+
+      assert failed.analyzers[completed_key]["status"] == "complete"
+      refute inspect(failed.analyzers) =~ "private scanner diagnostics"
+    end
+
+    @tag :capture_log
     test "generated worker retries a transient failure and preserves evidence between attempts" do
       key = to_string(AshStorage.Test.RecoveringAnalyzer)
 
@@ -320,11 +358,17 @@ defmodule AshStorage.AnalyzerObanTest do
       job = AshOban.run_trigger(blob, :run_pending_analyzers)
       worker = AshStorage.Test.PgBlob.RunPendingAnalyzersWorker
 
-      for attempt <- 1..job.max_attempts do
+      for attempt <- 1..(job.max_attempts - 1) do
         assert_raise Ash.Error.Invalid, ~r/analyzer_retry_required/, fn ->
           perform_job(worker, job.args, attempt: attempt, max_attempts: job.max_attempts)
         end
       end
+
+      assert {:cancel, :trigger_no_longer_applies} =
+               perform_job(worker, job.args,
+                 attempt: job.max_attempts,
+                 max_attempts: job.max_attempts
+               )
 
       failed = Ash.get!(PgBlob, blob.id)
       refute failed.pending_analyzers

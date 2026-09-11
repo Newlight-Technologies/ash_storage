@@ -125,6 +125,7 @@ defmodule AshStorage.BlobResource.Transformers.SetupBlob do
            ),
          {:ok, dsl_state} <- add_complete_analysis_action(dsl_state),
          {:ok, dsl_state} <- add_run_pending_analyzers_action(dsl_state),
+         {:ok, dsl_state} <- add_fail_pending_analyzers_action(dsl_state),
          {:ok, dsl_state} <- add_create_variant_action(dsl_state),
          {:ok, dsl_state} <- add_run_pending_variants_action(dsl_state) do
       {:ok, purge_change} =
@@ -197,6 +198,23 @@ defmodule AshStorage.BlobResource.Transformers.SetupBlob do
     Ash.Resource.Builder.add_action(dsl_state, :update, :run_pending_analyzers,
       accept: [],
       transaction?: false,
+      require_atomic?: false,
+      changes: [change]
+    )
+  end
+
+  defp add_fail_pending_analyzers_action(dsl_state) do
+    {:ok, change} =
+      Ash.Resource.Builder.build_action_change(
+        AshStorage.BlobResource.Changes.FailPendingAnalyzers
+      )
+
+    {:ok, error_arg} = Ash.Resource.Builder.build_action_argument(:error, :term)
+
+    # The change orchestrates atomic per-analyzer completion actions.
+    Ash.Resource.Builder.add_action(dsl_state, :update, :fail_pending_analyzers,
+      accept: [],
+      arguments: [error_arg],
       require_atomic?: false,
       changes: [change]
     )

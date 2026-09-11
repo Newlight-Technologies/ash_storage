@@ -154,6 +154,8 @@ defmodule MyApp.StorageBlob do
     triggers do
       trigger :run_pending_analyzers do
         action :run_pending_analyzers
+        on_error :fail_pending_analyzers
+        on_error_fails_job? true
         read_action :read
         where expr(pending_analyzers == true)
         scheduler_cron("* * * * *")
@@ -169,6 +171,15 @@ end
 ```
 
 The `where` clause ensures only blobs with pending analyzers are picked up. When the trigger fires, the `:run_pending_analyzers` action downloads the file from storage and runs each pending analyzer.
+
+The generated `:fail_pending_analyzers` action is the exhaustion handler for
+exceptions that prevented a normal analyzer outcome from being recorded. It
+marks unfinished entries as errored, retains completed entries, and records
+`analyzer_job_exhausted` without persisting raw exception contents. Configure
+policies for this action alongside the run and completion actions. Existing
+triggers must explicitly add `on_error`; adding the library action alone does
+not change their configuration. Job timeouts and process-loss recovery still
+depend on the host application's Oban configuration.
 
 If you use `analyze: :oban` without this trigger configured, a compile-time verifier will raise an error telling you what to add.
 
