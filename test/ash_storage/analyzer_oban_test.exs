@@ -57,6 +57,26 @@ defmodule AshStorage.AnalyzerObanTest do
   end
 
   describe "run_analyzer/3 on Postgres" do
+    test "denied file-argument analyzer target setup rolls back upload without enqueueing" do
+      actor = %{restricted?: true, role: :viewer, deny_analyzer_target?: true}
+      counts = Enum.map([PgPost, PgBlob, AshStorage.Test.PgAttachment], &Ash.count!/1)
+      keys = AshStorage.Service.Test.list_keys()
+
+      result =
+        AshStorage.AnalyzerScratch.with_file("evidence", fn path ->
+          PgPost
+          |> Ash.Changeset.for_create(
+            :create_with_analyzed_document,
+            %{title: "not committed", file: Ash.Type.File.from_path(path)}, actor: actor)
+          |> Ash.create()
+        end)
+
+      assert {:error, %Ash.Error.Forbidden{}} = result
+      assert Enum.map([PgPost, PgBlob, AshStorage.Test.PgAttachment], &Ash.count!/1) == counts
+      assert AshStorage.Service.Test.list_keys() == keys
+      refute_enqueued(worker: PgBlob.RunPendingAnalyzersWorker)
+    end
+
     for upload_path <- [:attach, :file_argument], role <- [:viewer, :editor] do
       @tag :capture_log
       test "#{upload_path} preserves the #{role} uploader in the analyzer worker" do

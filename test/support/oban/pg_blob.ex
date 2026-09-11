@@ -3,6 +3,7 @@ defmodule AshStorage.Test.PgBlob do
   use Ash.Resource,
     domain: AshStorage.Test.PgDomain,
     data_layer: AshPostgres.DataLayer,
+    authorizers: [Ash.Policy.Authorizer],
     extensions: [AshStorage.BlobResource, AshOban]
 
   postgres do
@@ -11,6 +12,17 @@ defmodule AshStorage.Test.PgBlob do
   end
 
   blob do
+  end
+
+  policies do
+    policy always() do
+      authorize_if always()
+    end
+
+    policy [action(:update_metadata), actor_attribute_equals(:deny_analyzer_target?, true)] do
+      forbid_if expr(pending_analyzers == true)
+      authorize_if always()
+    end
   end
 
   oban do

@@ -65,11 +65,15 @@ defmodule AshStorage.Changes.HandleFileArgument do
                      context_opts
                    ),
                  {:ok, attachment} <-
-                   create_attachment(record, attachment_def, blob, context_opts) do
-              # Now that we have the record ID, update write_target for oban analyzers
+                   create_attachment(record, attachment_def, blob, context_opts),
+                 {:ok, blob} <-
+                   update_oban_write_targets(
+                     blob,
+                     record,
+                     context_opts,
+                     context[:has_oban_analyzers?]
+                   ) do
               if context[:has_oban_analyzers?] do
-                update_oban_write_targets(blob, record, context_opts)
-
                 AshOban.run_trigger(blob, :run_pending_analyzers,
                   tenant: changeset.tenant,
                   actor: context_opts[:actor]
@@ -152,7 +156,9 @@ defmodule AshStorage.Changes.HandleFileArgument do
   end
 
   # After create, we have the real record ID — update write_target in blob's analyzers map
-  defp update_oban_write_targets(blob, record, context_opts) do
+  defp update_oban_write_targets(blob, _record, _context_opts, false), do: {:ok, blob}
+
+  defp update_oban_write_targets(blob, record, context_opts, true) do
     analyzers = blob.analyzers || %{}
 
     has_write_targets? =
@@ -184,6 +190,8 @@ defmodule AshStorage.Changes.HandleFileArgument do
         %{analyzers: updated},
         Keyword.merge(context_opts, action: :update_metadata)
       )
+    else
+      {:ok, blob}
     end
   end
 
