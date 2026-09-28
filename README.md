@@ -132,6 +132,15 @@ This automatically adds:
 
 For `has_one_attached`, attaching replaces any existing attachment (the old file is purged). For `has_many_attached`, each attach appends.
 
+Storage-owned blob and attachment actions inherit the parent action's normalized actor, tenant,
+authorization setting, tracer, and shared Ash context. They inherit only the private
+`ash_oban?: true` marker when it is exactly `true`; other private, data-layer, and
+relationship-access context is not forwarded. This is context propagation, **not** authentication
+of arbitrary callers: only a trusted background job should set the marker, and each child resource
+must still define its own policies. Attachment lifecycle reads fail closed when a matching child is
+unauthorized or its blob is hidden or missing; AshStorage does not repair dangling rows or files.
+Analyzer and variant background jobs have their own context lifecycle.
+
 ### Loading attachments
 
 ```elixir
@@ -185,6 +194,8 @@ end
 Database rows are removed inside the transaction; storage objects are deleted only after it
 commits. A failed object delete therefore cannot restore the database rows, but the operation
 returns an error that identifies the object requiring reconciliation.
+This guarantee applies to the Ash action's own transaction. An unrelated outer transaction or
+distributed workflow needs separate orchestration; it is not made atomic by this cleanup hook.
 
 Soft destroy actions (where `action.soft?` is true) skip dependent attachment handling entirely.
 

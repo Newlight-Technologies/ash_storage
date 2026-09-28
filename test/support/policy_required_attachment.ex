@@ -17,10 +17,6 @@ defmodule AshStorage.Test.PolicyRequiredAttachment do
   end
 
   policies do
-    bypass AshOban.Checks.AshObanInteraction do
-      authorize_if always()
-    end
-
     policy action_type([:read, :create, :update, :destroy]) do
       authorize_if actor_present()
     end

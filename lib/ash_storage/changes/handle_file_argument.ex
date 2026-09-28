@@ -2,8 +2,6 @@ defmodule AshStorage.Changes.HandleFileArgument do
   @moduledoc false
   use Ash.Resource.Change
 
-  require Ash.Query
-
   alias AshStorage.Changes.PurgeFilesAfterTransaction
   alias AshStorage.Info
   alias AshStorage.Service.Context
@@ -16,7 +14,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
   def change(changeset, opts, context) do
     argument_name = opts[:argument]
     attachment_name = opts[:attachment]
-    context_opts = Ash.Context.to_opts(context)
+    context_opts = AshStorage.ChildContext.to_opts(context)
 
     file = Ash.Changeset.get_argument(changeset, argument_name)
 
@@ -511,6 +509,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
   defp find_attachments(record, attachment_def, context_opts) do
     resource = record.__struct__
     attachment_resource = Info.storage_attachment_resource!(resource)
+    blob_resource = Info.storage_blob_resource!(resource)
     record_id = Map.get(record, :id) |> to_string()
 
     belongs_to_resources =
@@ -529,10 +528,12 @@ defmodule AshStorage.Changes.HandleFileArgument do
         ]
       end
 
-    attachment_resource
-    |> Ash.Query.filter(^filter)
-    |> Ash.Query.load(:blob)
-    |> Ash.read(Keyword.take(context_opts, [:actor, :tenant, :authorize?, :tracer]))
+    AshStorage.ChildContext.read_attachments(
+      attachment_resource,
+      blob_resource,
+      filter,
+      context_opts
+    )
   end
 
   defp purge_attachments(attachments, record, attachment_def, context_opts) do
