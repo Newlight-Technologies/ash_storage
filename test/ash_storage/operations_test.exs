@@ -14,6 +14,62 @@ defmodule AshStorage.OperationsTest do
     |> Ash.create!()
   end
 
+  describe "private caller context" do
+    test "nil-actor AshOban context reaches blob and attachment creates and replacement reads" do
+      post =
+        AshStorage.Test.PolicyRequiredPost
+        |> Ash.Changeset.for_create(:create, %{title: "private attach"}, actor: :authorized)
+        |> Ash.create!()
+
+      opts = [actor: nil, authorize?: true, context: %{private: %{ash_oban?: true}}]
+
+      assert {:ok, %{blob: first_blob, attachment: first_attachment}} =
+               Operations.attach(post, :cover_image, "first", [filename: "first.txt"] ++ opts)
+
+      assert first_attachment.blob_id == first_blob.id
+      assert AshStorage.Service.Test.exists?(first_blob.key)
+
+      assert {:ok, %{blob: replacement_blob, attachment: replacement_attachment}} =
+               Operations.attach(
+                 post,
+                 :cover_image,
+                 "replacement",
+                 [filename: "next.txt"] ++ opts
+               )
+
+      assert replacement_attachment.blob_id == replacement_blob.id
+      assert replacement_attachment.id != first_attachment.id
+      refute AshStorage.Service.Test.exists?(first_blob.key)
+      assert AshStorage.Service.Test.exists?(replacement_blob.key)
+
+      loaded = Ash.load!(post, [cover_image: :blob], actor: :authorized)
+      assert loaded.cover_image.id == replacement_attachment.id
+      assert loaded.cover_image.blob.id == replacement_blob.id
+    end
+
+    test "nil actor without authorized private context cannot attach" do
+      post =
+        AshStorage.Test.PolicyRequiredPost
+        |> Ash.Changeset.for_create(:create, %{title: "denied attach"}, actor: :authorized)
+        |> Ash.create!()
+
+      keys_before = AshStorage.Service.Test.list_keys()
+
+      for context <- [%{}, %{private: %{ash_oban?: false}}, %{private: %{other: true}}] do
+        assert {:error, _} =
+                 Operations.attach(post, :cover_image, "denied",
+                   filename: "denied.txt",
+                   actor: nil,
+                   authorize?: true,
+                   context: context
+                 )
+      end
+
+      assert AshStorage.Service.Test.list_keys() == keys_before
+      assert Ash.load!(post, :cover_image, actor: :authorized).cover_image == nil
+    end
+  end
+
   describe "attach/4" do
     test "uploads file and creates blob + attachment" do
       post = create_post!()

@@ -16,7 +16,7 @@ defmodule AshStorage.Changes.Attach do
   @impl true
   def change(changeset, opts, context) do
     attachment_name = opts[:attachment_name]
-    context_opts = Ash.Context.to_opts(context)
+    context_opts = Ash.Scope.to_opts(context, context: context.source_context)
     rollback_ref = make_ref()
 
     changeset
@@ -487,6 +487,7 @@ defmodule AshStorage.Changes.Attach do
   defp find_attachments(record, attachment_def, context_opts) do
     resource = record.__struct__
     attachment_resource = Info.storage_attachment_resource!(resource)
+    blob_resource = Info.storage_blob_resource!(resource)
     record_id = Map.get(record, :id) |> to_string()
 
     belongs_to_resources =
@@ -509,31 +510,37 @@ defmodule AshStorage.Changes.Attach do
       end
 
     attachment_resource
+    |> Ash.Query.for_read(:read, %{}, context_opts)
     |> Ash.Query.filter(^filter)
-    |> Ash.Query.load(:blob)
-    |> Ash.read(Keyword.take(context_opts, [:actor, :tenant, :authorize?, :tracer]))
+    |> Ash.Query.load(blob: Ash.Query.for_read(blob_resource, :read, %{}, context_opts))
+    |> Ash.read(context_opts)
   end
 
   defp purge_attachments(attachments, record, attachment_def, context_opts) do
     destroy_opts = Keyword.merge(context_opts, action: :destroy, return_destroyed?: true)
 
     Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, keys_acc} ->
-      blob = att.blob
-      loaded_blob = Ash.load!(blob, :parsed_service_opts, context_opts)
+      case att.blob do
+        %{id: _} = blob ->
+          loaded_blob = Ash.load!(blob, :parsed_service_opts, context_opts)
 
-      ctx =
-        Context.new(loaded_blob.parsed_service_opts || [],
-          resource: record.__struct__,
-          attachment: attachment_def,
-          actor: context_opts[:actor],
-          tenant: context_opts[:tenant]
-        )
+          ctx =
+            Context.new(loaded_blob.parsed_service_opts || [],
+              resource: record.__struct__,
+              attachment: attachment_def,
+              actor: context_opts[:actor],
+              tenant: context_opts[:tenant]
+            )
 
-      with {:ok, _} <- Ash.destroy(att, destroy_opts),
-           {:ok, _} <- Ash.destroy(blob, destroy_opts) do
-        {:cont, {:ok, [{blob.service_name, ctx, blob.key} | keys_acc]}}
-      else
-        {:error, error} -> {:halt, {:error, error}}
+          with {:ok, _} <- Ash.destroy(att, destroy_opts),
+               {:ok, _} <- Ash.destroy(blob, destroy_opts) do
+            {:cont, {:ok, [{blob.service_name, ctx, blob.key} | keys_acc]}}
+          else
+            {:error, error} -> {:halt, {:error, error}}
+          end
+
+        nil ->
+          {:halt, {:error, :blob_not_found}}
       end
     end)
   end
