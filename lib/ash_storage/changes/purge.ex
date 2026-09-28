@@ -2,9 +2,8 @@ defmodule AshStorage.Changes.Purge do
   @moduledoc false
   use Ash.Resource.Change
 
-  require Ash.Query
-
   alias AshStorage.Info
+  alias AshStorage.Changes.PurgeFilesAfterTransaction
   alias AshStorage.Service.Context
 
   @impl true
@@ -13,7 +12,7 @@ defmodule AshStorage.Changes.Purge do
   @impl true
   def change(changeset, opts, context) do
     attachment_name = opts[:attachment_name]
-    context_opts = Ash.Context.to_opts(context)
+    context_opts = AshStorage.ChildContext.to_opts(context)
 
     Ash.Changeset.after_action(changeset, fn _changeset, record ->
       resource = record.__struct__
@@ -26,15 +25,23 @@ defmodule AshStorage.Changes.Purge do
            {:ok, {service_mod, service_opts}} <- resolve_service(resource, attachment_def) do
         ctx = build_context(service_opts, resource, attachment_def, changeset)
 
-        case purge_attachments(to_purge, service_mod, ctx, context_opts) do
+        case purge_attachments(to_purge, context_opts) do
           {:ok, purged} ->
-            {:ok, Ash.Resource.put_metadata(record, :purged_attachments, purged)}
+            record =
+              record
+              |> Ash.Resource.put_metadata(:purged_attachments, purged)
+              |> PurgeFilesAfterTransaction.put_record(
+                Enum.map(purged, fn att -> {service_mod, ctx, att.blob.key} end)
+              )
+
+            {:ok, record}
 
           {:error, error} ->
             {:error, error}
         end
       end
     end)
+    |> Ash.Changeset.after_transaction(&PurgeFilesAfterTransaction.run/2)
   end
 
   defp select_for_purge(attachments, %{type: :one}, _blob_id, _all?), do: {:ok, attachments}
@@ -69,6 +76,7 @@ defmodule AshStorage.Changes.Purge do
   defp find_attachments(record, attachment_def, context_opts) do
     resource = record.__struct__
     attachment_resource = Info.storage_attachment_resource!(resource)
+    blob_resource = Info.storage_blob_resource!(resource)
     record_id = Map.get(record, :id) |> to_string()
 
     belongs_to_resources =
@@ -90,20 +98,21 @@ defmodule AshStorage.Changes.Purge do
         ]
       end
 
-    attachment_resource
-    |> Ash.Query.filter(^filter)
-    |> Ash.Query.load(:blob)
-    |> Ash.read(Keyword.take(context_opts, [:actor, :tenant, :authorize?, :tracer]))
+    AshStorage.ChildContext.read_attachments(
+      attachment_resource,
+      blob_resource,
+      filter,
+      context_opts
+    )
   end
 
-  defp purge_attachments(attachments, service_mod, ctx, context_opts) do
+  defp purge_attachments(attachments, context_opts) do
     destroy_opts = Keyword.merge(context_opts, action: :destroy, return_destroyed?: true)
 
     Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, acc} ->
       blob = att.blob
 
-      with :ok <- service_mod.delete(blob.key, ctx),
-           {:ok, _} <- Ash.destroy(att, destroy_opts),
+      with {:ok, _} <- Ash.destroy(att, destroy_opts),
            {:ok, _} <- Ash.destroy(blob, destroy_opts) do
         {:cont, {:ok, [att | acc]}}
       else

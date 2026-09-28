@@ -13,8 +13,6 @@ defmodule AshStorage.Operations do
   - `:purge_<name>` — remove attachment + blob records and delete files
   """
 
-  require Ash.Query
-
   alias AshStorage.Info
   alias AshStorage.Service.Context
 
@@ -324,17 +322,20 @@ defmodule AshStorage.Operations do
   @doc false
   def destroy_attachment_and_blob_records(record, attachment_name, opts \\ []) do
     resource = record.__struct__
+    child_opts = AshStorage.ChildContext.narrow_opts(opts)
 
     with {:ok, attachment_def} <- Info.attachment(resource, attachment_name),
-         {:ok, attachments} <- find_attachments(record, attachment_def, opts),
+         {:ok, attachments} <- find_attachments(record, attachment_def, child_opts),
          {:ok, {service_mod, service_opts}} <- resolve_service(resource, attachment_def) do
-      ctx = build_context(service_opts, resource, attachment_def, opts)
+      ctx = build_context(service_opts, resource, attachment_def, child_opts)
 
       Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, keys_acc} ->
         blob = att.blob
 
-        with {:ok, _} <- Ash.destroy(att, action: :destroy, return_destroyed?: true),
-             {:ok, _} <- Ash.destroy(blob, action: :destroy, return_destroyed?: true) do
+        destroy_opts = Keyword.merge(child_opts, action: :destroy, return_destroyed?: true)
+
+        with {:ok, _} <- Ash.destroy(att, destroy_opts),
+             {:ok, _} <- Ash.destroy(blob, destroy_opts) do
           {:cont, {:ok, [{service_mod, ctx, blob.key} | keys_acc]}}
         else
           {:error, error} -> {:halt, {:error, error}}
@@ -346,19 +347,23 @@ defmodule AshStorage.Operations do
   @doc false
   def mark_attachments_for_purge(record, attachment_name, opts \\ []) do
     resource = record.__struct__
+    child_opts = AshStorage.ChildContext.narrow_opts(opts)
 
     with {:ok, attachment_def} <- Info.attachment(resource, attachment_name),
-         {:ok, attachments} <- find_attachments(record, attachment_def, opts) do
+         {:ok, attachments} <- find_attachments(record, attachment_def, child_opts) do
       Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, acc} ->
         blob = att.blob
 
-        with {:ok, _} <- Ash.destroy(att, action: :destroy, return_destroyed?: true),
+        with {:ok, _} <-
+               Ash.destroy(
+                 att,
+                 Keyword.merge(child_opts, action: :destroy, return_destroyed?: true)
+               ),
              {:ok, blob} <-
                Ash.update(
                  blob,
                  %{pending_purge: true},
-                 action: :mark_for_purge,
-                 return_record?: true
+                 Keyword.merge(child_opts, action: :mark_for_purge, return_record?: true)
                ) do
           {:cont, {:ok, [blob | acc]}}
         else
@@ -450,6 +455,7 @@ defmodule AshStorage.Operations do
   defp find_attachments(record, attachment_def, context_opts) do
     resource = record.__struct__
     attachment_resource = Info.storage_attachment_resource!(resource)
+    blob_resource = Info.storage_blob_resource!(resource)
     record_id = Map.get(record, :id) |> to_string()
 
     belongs_to_resources =
@@ -471,9 +477,11 @@ defmodule AshStorage.Operations do
         ]
       end
 
-    attachment_resource
-    |> Ash.Query.filter(^filter)
-    |> Ash.Query.load(:blob)
-    |> Ash.read(Keyword.take(context_opts, [:actor, :tenant, :authorize?, :tracer]))
+    AshStorage.ChildContext.read_attachments(
+      attachment_resource,
+      blob_resource,
+      filter,
+      AshStorage.ChildContext.narrow_opts(context_opts)
+    )
   end
 end

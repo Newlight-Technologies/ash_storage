@@ -25,8 +25,6 @@ defmodule AshStorage.Changes.AttachBlob do
   """
   use Ash.Resource.Change
 
-  require Ash.Query
-
   alias AshStorage.Changes.PurgeFilesAfterTransaction
   alias AshStorage.Info
   alias AshStorage.Service.Context
@@ -57,7 +55,7 @@ defmodule AshStorage.Changes.AttachBlob do
         {:ok, record}
       else
         resource = record.__struct__
-        context_opts = Ash.Context.to_opts(context)
+        context_opts = AshStorage.ChildContext.to_opts(context)
 
         with {:ok, attachment_def} <- Info.attachment(resource, attachment_name),
              {:ok, {service_mod, service_opts}} <- resolve_service(resource, attachment_def),
@@ -101,7 +99,9 @@ defmodule AshStorage.Changes.AttachBlob do
     blob_resource = Info.storage_blob_resource!(resource)
 
     case Ash.get(blob_resource, blob_id, context_opts) do
-      {:ok, blob} -> {:ok, blob}
+      {:ok, %{id: _} = blob} -> {:ok, blob}
+      {:ok, nil} -> {:error, :blob_not_found}
+      {:error, %Ash.Error.Forbidden{} = error} -> {:error, error}
       {:error, _} -> {:error, :blob_not_found}
     end
   end
@@ -154,6 +154,7 @@ defmodule AshStorage.Changes.AttachBlob do
     case find_attachments(record, attachment_def, context_opts) do
       {:ok, []} -> {:ok, []}
       {:ok, existing} -> purge_attachments(existing, service_mod, ctx, context_opts)
+      {:error, error} -> {:error, error}
     end
   end
 
@@ -199,6 +200,7 @@ defmodule AshStorage.Changes.AttachBlob do
   defp find_attachments(record, attachment_def, context_opts) do
     resource = record.__struct__
     attachment_resource = Info.storage_attachment_resource!(resource)
+    blob_resource = Info.storage_blob_resource!(resource)
     record_id = Map.get(record, :id) |> to_string()
 
     belongs_to_resources =
@@ -220,10 +222,12 @@ defmodule AshStorage.Changes.AttachBlob do
         ]
       end
 
-    attachment_resource
-    |> Ash.Query.filter(^filter)
-    |> Ash.Query.load(:blob)
-    |> Ash.read(Keyword.take(context_opts, [:actor, :tenant, :authorize?, :tracer]))
+    AshStorage.ChildContext.read_attachments(
+      attachment_resource,
+      blob_resource,
+      filter,
+      context_opts
+    )
   end
 
   defp purge_attachments(attachments, service_mod, ctx, context_opts) do

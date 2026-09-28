@@ -43,7 +43,7 @@ defmodule AshStorage.Changes.AttachFile do
 
         %Ash.Type.File{} = file ->
           {filename, content_type} = extract_file_metadata(file)
-          context_opts = Ash.Context.to_opts(context)
+          context_opts = AshStorage.ChildContext.to_opts(context)
 
           attach_opts =
             Keyword.merge(context_opts, filename: filename, content_type: content_type)
@@ -63,7 +63,7 @@ defmodule AshStorage.Changes.AttachFile do
   def after_batch(changesets_and_results, opts, context) do
     argument = opts[:argument]
     attachment = opts[:attachment]
-    context_opts = Ash.Context.to_opts(context)
+    context_opts = AshStorage.ChildContext.to_opts(context)
 
     # Split into items that need attachment and those that don't
     {to_attach, passthrough} =

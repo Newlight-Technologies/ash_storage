@@ -2,8 +2,6 @@ defmodule AshStorage.Changes.Attach do
   @moduledoc false
   use Ash.Resource.Change
 
-  require Ash.Query
-
   alias AshStorage.Changes.PurgeFilesAfterTransaction
   alias AshStorage.Info
   alias AshStorage.Service.Context
@@ -16,7 +14,7 @@ defmodule AshStorage.Changes.Attach do
   @impl true
   def change(changeset, opts, context) do
     attachment_name = opts[:attachment_name]
-    context_opts = Ash.Context.to_opts(context)
+    context_opts = AshStorage.ChildContext.to_opts(context)
     rollback_ref = make_ref()
 
     changeset
@@ -64,7 +62,8 @@ defmodule AshStorage.Changes.Attach do
                    context_opts,
                    rollback_ref
                  ),
-               {:ok, blob} <- store_oban_variants(blob, attachment_def, resource) do
+               {:ok, blob} <-
+                 store_oban_variants(blob, attachment_def, resource, context_opts) do
             if attach_context[:has_oban_analyzers?] do
               AshOban.run_trigger(blob, :run_pending_analyzers, tenant: changeset.tenant)
             end
@@ -487,6 +486,7 @@ defmodule AshStorage.Changes.Attach do
   defp find_attachments(record, attachment_def, context_opts) do
     resource = record.__struct__
     attachment_resource = Info.storage_attachment_resource!(resource)
+    blob_resource = Info.storage_blob_resource!(resource)
     record_id = Map.get(record, :id) |> to_string()
 
     belongs_to_resources =
@@ -508,32 +508,39 @@ defmodule AshStorage.Changes.Attach do
         ]
       end
 
-    attachment_resource
-    |> Ash.Query.filter(^filter)
-    |> Ash.Query.load(:blob)
-    |> Ash.read(Keyword.take(context_opts, [:actor, :tenant, :authorize?, :tracer]))
+    AshStorage.ChildContext.read_attachments(
+      attachment_resource,
+      blob_resource,
+      filter,
+      context_opts
+    )
   end
 
   defp purge_attachments(attachments, record, attachment_def, context_opts) do
     destroy_opts = Keyword.merge(context_opts, action: :destroy, return_destroyed?: true)
 
     Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, keys_acc} ->
-      blob = att.blob
-      loaded_blob = Ash.load!(blob, :parsed_service_opts, context_opts)
+      case att.blob do
+        %{id: _} = blob ->
+          loaded_blob = Ash.load!(blob, :parsed_service_opts, context_opts)
 
-      ctx =
-        Context.new(loaded_blob.parsed_service_opts || [],
-          resource: record.__struct__,
-          attachment: attachment_def,
-          actor: context_opts[:actor],
-          tenant: context_opts[:tenant]
-        )
+          ctx =
+            Context.new(loaded_blob.parsed_service_opts || [],
+              resource: record.__struct__,
+              attachment: attachment_def,
+              actor: context_opts[:actor],
+              tenant: context_opts[:tenant]
+            )
 
-      with {:ok, _} <- Ash.destroy(att, destroy_opts),
-           {:ok, _} <- Ash.destroy(blob, destroy_opts) do
-        {:cont, {:ok, [{blob.service_name, ctx, blob.key} | keys_acc]}}
-      else
-        {:error, error} -> {:halt, {:error, error}}
+          with {:ok, _} <- Ash.destroy(att, destroy_opts),
+               {:ok, _} <- Ash.destroy(blob, destroy_opts) do
+            {:cont, {:ok, [{blob.service_name, ctx, blob.key} | keys_acc]}}
+          else
+            {:error, error} -> {:halt, {:error, error}}
+          end
+
+        nil ->
+          {:halt, {:error, :blob_not_found}}
       end
     end)
   end
@@ -586,7 +593,7 @@ defmodule AshStorage.Changes.Attach do
     |> Enum.any?(&(&1.generate == :oban))
   end
 
-  defp store_oban_variants(blob, attachment_def, resource) do
+  defp store_oban_variants(blob, attachment_def, resource, context_opts) do
     oban_variants =
       (attachment_def.variants || [])
       |> Enum.filter(&(&1.generate == :oban))
@@ -611,7 +618,11 @@ defmodule AshStorage.Changes.Attach do
 
       metadata = Map.put(blob.metadata || %{}, "__pending_variants__", pending_variants)
 
-      Ash.update(blob, %{metadata: metadata, pending_variants: true}, action: :update_metadata)
+      Ash.update(
+        blob,
+        %{metadata: metadata, pending_variants: true},
+        Keyword.put(context_opts, :action, :update_metadata)
+      )
     end
   end
 end
