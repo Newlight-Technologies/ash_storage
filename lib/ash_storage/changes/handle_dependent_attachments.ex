@@ -9,7 +9,7 @@ defmodule AshStorage.Changes.HandleDependentAttachments do
     if changeset.action.soft? do
       changeset
     else
-      context_opts = Ash.Context.to_opts(context)
+      context_opts = AshStorage.ChildContext.to_opts(context)
       resource = changeset.resource
       async? = async_purge?(resource)
 
@@ -19,23 +19,22 @@ defmodule AshStorage.Changes.HandleDependentAttachments do
       changeset =
         Ash.Changeset.before_action(changeset, fn changeset ->
           record = changeset.data
-          attachments_by_name = prefetch_attachments(record, context_opts)
 
-          case process_attachments(
-                 AshStorage.Info.attachments(resource),
-                 attachments_by_name,
-                 async?,
-                 context_opts
-               ) do
-            {:ok, result} ->
-              if async? do
-                Ash.Changeset.put_context(changeset, :__ash_storage_blobs_to_purge__, result)
-              else
-                PurgeFilesAfterTransaction.put_changeset(changeset, result)
-              end
-
-            {:error, error} ->
-              Ash.Changeset.add_error(changeset, error)
+          with {:ok, attachments_by_name} <- prefetch_attachments(record, context_opts),
+               {:ok, result} <-
+                 process_attachments(
+                   AshStorage.Info.attachments(resource),
+                   attachments_by_name,
+                   async?,
+                   context_opts
+                 ) do
+            if async? do
+              Ash.Changeset.put_context(changeset, :__ash_storage_blobs_to_purge__, result)
+            else
+              PurgeFilesAfterTransaction.put_changeset(changeset, result)
+            end
+          else
+            {:error, error} -> Ash.Changeset.add_error(changeset, error)
           end
         end)
 
@@ -72,10 +71,11 @@ defmodule AshStorage.Changes.HandleDependentAttachments do
     resource = record.__struct__
     attachment_defs = AshStorage.Info.attachments(resource)
 
-    Enum.reduce(attachment_defs, %{}, fn attachment_def, acc ->
+    Enum.reduce_while(attachment_defs, {:ok, %{}}, fn attachment_def, {:ok, acc} ->
       case attachment_def.dependent do
         dep when dep in [:purge, :detach] ->
           attachment_resource = AshStorage.Info.storage_attachment_resource!(resource)
+          blob_resource = AshStorage.Info.storage_blob_resource!(resource)
           record_id = Map.get(record, :id) |> to_string()
 
           belongs_to_resources =
@@ -97,16 +97,18 @@ defmodule AshStorage.Changes.HandleDependentAttachments do
               ]
             end
 
-          case attachment_resource
-               |> Ash.Query.filter(^filter)
-               |> Ash.Query.load(:blob)
-               |> Ash.read(Keyword.take(context_opts, [:actor, :tenant, :authorize?, :tracer])) do
-            {:ok, attachments} -> Map.put(acc, attachment_def.name, attachments)
-            _ -> acc
+          case AshStorage.ChildContext.read_attachments(
+                 attachment_resource,
+                 blob_resource,
+                 filter,
+                 context_opts
+               ) do
+            {:ok, attachments} -> {:cont, {:ok, Map.put(acc, attachment_def.name, attachments)}}
+            {:error, error} -> {:halt, {:error, error}}
           end
 
         _ ->
-          acc
+          {:cont, {:ok, acc}}
       end
     end)
   end

@@ -13,7 +13,7 @@ defmodule AshStorage.BlobResource.Changes.PurgeFile do
 
   @impl true
   def change(changeset, _opts, context) do
-    context_opts = Ash.Context.to_opts(context)
+    context_opts = AshStorage.ChildContext.to_opts(context)
 
     changeset
     |> Ash.Changeset.before_action(fn changeset ->

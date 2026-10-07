@@ -103,6 +103,29 @@ defmodule AshStorage.ObanIntegrationTest do
     end
   end
 
+  describe "parent purge action" do
+    test "same-action rollback retains database rows and storage object" do
+      post = create_post!("purge rollback")
+
+      assert {:ok, %{blob: blob, attachment: attachment}} =
+               AshStorage.Operations.attach(post, :cover_image, "rollback data",
+                 filename: "rollback.txt"
+               )
+
+      assert {:error, _} =
+               post
+               |> Ash.Changeset.for_update(:purge_cover_image, %{})
+               |> Ash.Changeset.after_action(fn _changeset, _record ->
+                 {:error, "forced rollback after purge"}
+               end)
+               |> Ash.update()
+
+      assert {:ok, _} = Ash.get(PgBlob, blob.id)
+      assert {:ok, _} = Ash.get(AshStorage.Test.PgAttachment, attachment.id)
+      assert AshStorage.Service.Test.exists?(blob.key)
+    end
+  end
+
   describe "async dependent purge" do
     test "destroying record marks blobs for purge instead of deleting files" do
       post = create_post!()

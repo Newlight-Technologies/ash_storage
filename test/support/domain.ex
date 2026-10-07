@@ -20,6 +20,9 @@ defmodule AshStorage.Test.Domain do
     resource AshStorage.Test.PolicyRequiredBlob
     resource AshStorage.Test.PolicyRequiredAttachment
     resource AshStorage.Test.PolicyRequiredPost
+    resource AshStorage.Test.ContextPolicyBlob
+    resource AshStorage.Test.ContextPolicyAttachment
+    resource AshStorage.Test.ContextPolicyPost
     resource AshStorage.Test.NoHeadPost
     resource AshStorage.Test.MultipartEtagPost
     resource AshStorage.Test.NestedPathPost

@@ -56,6 +56,49 @@ defmodule AshStorage.DependentTest do
   end
 
   describe "caller context contract" do
+    test "filtered child read forbids host destroy and preserves its object" do
+      post =
+        AshStorage.Test.ContextPolicyPost
+        |> Ash.Changeset.for_create(:create, %{title: "child hidden"})
+        |> Ash.create!()
+
+      assert {:ok, %{blob: blob, attachment: attachment}} =
+               Operations.attach(post, :cover_image, "kept",
+                 filename: "kept.txt",
+                 actor: %{role: :storage, visible_name: "cover_image"},
+                 authorize?: true
+               )
+
+      assert {:error, %Ash.Error.Forbidden{}} =
+               Ash.destroy(post,
+                 actor: %{role: :read_only, visible_name: "documents"},
+                 authorize?: true
+               )
+
+      assert {:ok, _} = Ash.get(AshStorage.Test.ContextPolicyPost, post.id)
+      assert AshStorage.Service.Test.exists?(blob.key)
+
+      assert {:ok, _} =
+               Ash.get(AshStorage.Test.ContextPolicyAttachment, attachment.id,
+                 actor: %{role: :storage, visible_name: "cover_image"}
+               )
+    end
+
+    test "nil-actor AshOban context reaches dependent child purge on host destroy" do
+      post =
+        AshStorage.Test.ContextPolicyPost
+        |> Ash.Changeset.for_create(:create, %{title: "oban dependent"})
+        |> Ash.create!()
+
+      opts = [actor: nil, authorize?: true, context: %{private: %{ash_oban?: true}}]
+
+      assert {:ok, %{blob: blob}} =
+               Operations.attach(post, :cover_image, "temporary", [filename: "temp.txt"] ++ opts)
+
+      assert :ok = Ash.destroy(post, opts)
+      refute AshStorage.Service.Test.exists?(blob.key)
+    end
+
     test "dependent purge authorizes nested loads and destroys with the caller actor" do
       path = Path.join(System.tmp_dir!(), "ash_storage_policy_dependent_purge.txt")
       File.write!(path, "policy dependent purge")

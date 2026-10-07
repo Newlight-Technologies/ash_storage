@@ -2,8 +2,6 @@ defmodule AshStorage.Changes.Detach do
   @moduledoc false
   use Ash.Resource.Change
 
-  require Ash.Query
-
   alias AshStorage.Info
 
   @impl true
@@ -12,7 +10,7 @@ defmodule AshStorage.Changes.Detach do
   @impl true
   def change(changeset, opts, context) do
     attachment_name = opts[:attachment_name]
-    context_opts = Ash.Context.to_opts(context)
+    context_opts = AshStorage.ChildContext.to_opts(context)
 
     Ash.Changeset.after_action(changeset, fn _changeset, record ->
       resource = record.__struct__
@@ -49,6 +47,7 @@ defmodule AshStorage.Changes.Detach do
   defp find_attachments(record, attachment_def, context_opts) do
     resource = record.__struct__
     attachment_resource = Info.storage_attachment_resource!(resource)
+    blob_resource = Info.storage_blob_resource!(resource)
     record_id = Map.get(record, :id) |> to_string()
 
     belongs_to_resources =
@@ -70,10 +69,12 @@ defmodule AshStorage.Changes.Detach do
         ]
       end
 
-    attachment_resource
-    |> Ash.Query.filter(^filter)
-    |> Ash.Query.load(:blob)
-    |> Ash.read(Keyword.take(context_opts, [:actor, :tenant, :authorize?, :tracer]))
+    AshStorage.ChildContext.read_attachments(
+      attachment_resource,
+      blob_resource,
+      filter,
+      context_opts
+    )
   end
 
   defp destroy_attachment_records(attachments, context_opts) do
